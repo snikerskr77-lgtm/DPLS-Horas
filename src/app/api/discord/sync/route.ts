@@ -150,40 +150,56 @@ async function processMessage(content: string, agentName: string, stats: SyncSta
       employeeId = String(emps.rows[0].id);
     }
 
-    // Verifica se já existe registo para esta data
+    // Constrói SQL manualmente para garantir NULL real (Neon não passa null corretamente via parâmetros)
+    const esc = (s: string) => `'${s.replace(/'/g, "''")}'`;
+    const nn = (s: string | null | undefined) => s ? esc(s) : 'NULL';
+
+    const exitTimeSQL = nn(parsed.exitTime);
+    const breakStartSQL = nn(parsed.breakTimes?.[0]);
+    const breakEndSQL = nn(parsed.breakTimes?.[1]);
+    const breaksDataSQL = nn(breaksDataJson);
+    const alertsSQL = nn(alertsJson);
+    const totalMinsSQL = String(parsed.totalMinutes ?? 0);
+    const dateSQL = esc(parsed.date);
+    const entryTimeSQL = esc(parsed.entryTime);
+
+    // Verifica se já existe
     const existing = await db.execute(sql`
       SELECT id FROM time_entries WHERE employee_id = ${employeeId}::uuid AND date = ${parsed.date}::date LIMIT 1
     `);
 
     if (existing.rows.length > 0) {
-      await db.execute(sql`
+      const existingId = String(existing.rows[0].id);
+      // UPDATE com SQL direto (string montada para nulls reais)
+      await db.execute(sql.raw(`
         UPDATE time_entries SET
-          entry_time = ${parsed.entryTime},
-          exit_time = ${parsed.exitTime || null},
-          break_start = ${parsed.breakTimes?.[0] || null},
-          break_end = ${parsed.breakTimes?.[1] || null},
-          breaks_data = ${breaksDataJson},
-          total_minutes = ${parsed.totalMinutes ?? 0},
-          alerts = ${alertsJson},
+          entry_time = ${entryTimeSQL},
+          exit_time = ${exitTimeSQL},
+          break_start = ${breakStartSQL},
+          break_end = ${breakEndSQL},
+          breaks_data = ${breaksDataSQL},
+          total_minutes = ${totalMinsSQL},
+          alerts = ${alertsSQL},
           updated_at = NOW()
-        WHERE id = ${String(existing.rows[0].id)}::uuid
-      `);
+        WHERE id = '${existingId.replace(/'/g, "''")}'::uuid
+      `));
       stats.entriesUpdated++;
     } else {
-      await db.execute(sql`
+      // INSERT com SQL direto
+      await db.execute(sql.raw(`
         INSERT INTO time_entries (employee_id, date, entry_time, exit_time, break_start, break_end, breaks_data, total_minutes, alerts)
         VALUES (
-          ${employeeId}::uuid,
-          ${parsed.date}::date,
-          ${parsed.entryTime},
-          ${parsed.exitTime || null},
-          ${parsed.breakTimes?.[0] || null},
-          ${parsed.breakTimes?.[1] || null},
-          ${breaksDataJson},
-          ${parsed.totalMinutes ?? 0},
-          ${alertsJson}
+          '${employeeId.replace(/'/g, "''")}'::uuid,
+          ${dateSQL}::date,
+          ${entryTimeSQL},
+          ${exitTimeSQL},
+          ${breakStartSQL},
+          ${breakEndSQL},
+          ${breaksDataSQL},
+          ${totalMinsSQL},
+          ${alertsSQL}
         )
-      `);
+      `));
       stats.entriesCreated++;
     }
   } catch (error) {

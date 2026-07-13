@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
-import { employees } from '@/db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 
 export async function GET() {
   try {
-    const allEmployees = await db
-      .select()
-      .from(employees)
-      .orderBy(employees.name);
-    return NextResponse.json(allEmployees);
+    const result = await db.execute(sql`
+      SELECT id::text, name, email, department, position,
+             is_active as "isActive", created_at as "createdAt", updated_at as "updatedAt"
+      FROM employees
+      ORDER BY name
+    `);
+    return NextResponse.json(result.rows);
   } catch (error) {
     console.error('Error fetching employees:', error);
     return NextResponse.json({ error: 'Erro ao carregar funcionários' }, { status: 500 });
@@ -25,17 +26,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Nome é obrigatório' }, { status: 400 });
     }
 
-    const [newEmployee] = await db
-      .insert(employees)
-      .values({
-        name,
-        email: email || null,
-        department: department || null,
-        position: position || null,
-      })
-      .returning();
+    await db.execute(sql`
+      INSERT INTO employees (name, email, department, position)
+      VALUES (${name}, ${email || null}, ${department || null}, ${position || null})
+    `);
 
-    return NextResponse.json(newEmployee, { status: 201 });
+    const result = await db.execute(sql`
+      SELECT id::text, name, email, department, position,
+             is_active as "isActive", created_at as "createdAt", updated_at as "updatedAt"
+      FROM employees WHERE name = ${name} ORDER BY created_at DESC LIMIT 1
+    `);
+    return NextResponse.json(result.rows[0], { status: 201 });
   } catch (error) {
     console.error('Error creating employee:', error);
     return NextResponse.json({ error: 'Erro ao criar funcionário' }, { status: 500 });
