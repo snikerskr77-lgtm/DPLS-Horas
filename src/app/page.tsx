@@ -337,11 +337,14 @@ export default function DashboardPage() {
                       onClick={async () => {
                         setClearing(true);
                         try {
-                          const res = await fetch('/api/clear-all', { method: 'DELETE' });
+                          const res = await fetch('/api/clear-all', { method: 'POST' });
                           const d = await res.json();
                           setClearResult(d);
+                          if (!d.success) {
+                            setClearResult({ success: false, message: d.error || 'Erro ao limpar dados' });
+                          }
                         } catch {
-                          setClearResult({ success: false, message: 'Erro de conexão' });
+                          setClearResult({ success: false, message: 'Erro de conexão — verifique se o servidor está online' });
                         } finally {
                           setClearing(false);
                         }
