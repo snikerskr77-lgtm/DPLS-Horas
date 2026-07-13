@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #3b82f6;
+  --color-brand-dim: rgba(59, 130, 246, 0.2);
+  --color-accent: #f59e0b;
+  --color-accent-dim: rgba(245, 158, 11, 0.2);
+  --color-surface: rgba(15, 23, 42, 0.6);
+  --color-surface-solid: #0f172a;
+  --color-neon-blue: rgba(59, 130, 246, 0.25);
+  --color-neon-amber: rgba(245, 158, 11, 0.25);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.12);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.25);
+}
+
+::selection {
+  background: rgba(59, 130, 246, 0.4);
+  color: white;
+}
+
+* {
+  scroll-behavior: smooth;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #030712;
+  color: #e2e8f0;
+}
+
+/* Background grid pattern */
+.bg-grid {
+  background-image:
+    linear-gradient(to right, rgba(255,255,255,0.02) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,0.02) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Glass card effect */
+.glass-card {
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+/* Neon glow */
+.neon-blue {
+  box-shadow: 0 0 15px rgba(59, 130, 246, 0.15), 0 0 45px rgba(59, 130, 246, 0.05);
+}
+.neon-amber {
+  box-shadow: 0 0 15px rgba(245, 158, 11, 0.15), 0 0 45px rgba(245, 158, 11, 0.05);
+}
+.neon-green {
+  box-shadow: 0 0 15px rgba(34, 197, 94, 0.15), 0 0 45px rgba(34, 197, 94, 0.05);
+}
+.neon-red {
+  box-shadow: 0 0 15px rgba(239, 68, 68, 0.15), 0 0 45px rgba(239, 68, 68, 0.05);
+}
+
+/* Input dark style */
+.input-dark {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+  transition: all 0.2s;
+}
+.input-dark:focus {
+  border-color: rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+  outline: none;
+}
+.input-dark::placeholder {
+  color: rgba(255,255,255,0.3);
+}
+
+/* Pulse bar animation */
+@keyframes pulse-bar {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+.animate-pulse-bar {
+  animation: pulse-bar 2s ease-in-out infinite;
+}
+
+/* Ping dot */
+@keyframes ping-slow {
+  0% { transform: scale(1); opacity: 1; }
+  75%, 100% { transform: scale(2); opacity: 0; }
+}
+.animate-ping-slow {
+  animation: ping-slow 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
