@@ -1,52 +1,33 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/db';
 import { timeEntries, employees, absences } from '@/db/schema';
+import { sql } from 'drizzle-orm';
 
 async function clearAllData() {
-  // Elimina por ordem correta para evitar erros de FK
-  const deletedEntries = await db.delete(timeEntries).returning();
-  const deletedAbsences = await db.delete(absences).returning();
-  const deletedEmployees = await db.delete(employees).returning();
+  // Usa SQL direto para evitar problemas de compatibilidade com o driver serverless
+  await db.execute(sql`DELETE FROM time_entries`);
+  await db.execute(sql`DELETE FROM absences`);
+  await db.execute(sql`DELETE FROM employees`);
 
-  return {
-    registosEliminados: deletedEntries.length,
-    faltasEliminadas: deletedAbsences.length,
-    funcionariosEliminados: deletedEmployees.length,
-  };
+  return { success: true };
 }
 
-// DELETE - método principal
-export async function DELETE() {
-  try {
-    const stats = await clearAllData();
-    return NextResponse.json({
-      success: true,
-      message: 'Todos os dados foram eliminados com sucesso.',
-      stats,
-    });
-  } catch (error) {
-    console.error('Erro ao limpar dados (DELETE):', error);
-    return NextResponse.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Erro desconhecido ao limpar dados',
-    }, { status: 500 });
-  }
-}
-
-// POST - fallback para ambientes que não permitem DELETE
 export async function POST() {
   try {
-    const stats = await clearAllData();
+    await clearAllData();
     return NextResponse.json({
       success: true,
       message: 'Todos os dados foram eliminados com sucesso.',
-      stats,
     });
   } catch (error) {
-    console.error('Erro ao limpar dados (POST):', error);
+    console.error('Erro ao limpar dados:', error);
     return NextResponse.json({
       success: false,
       error: error instanceof Error ? error.message : 'Erro desconhecido ao limpar dados',
     }, { status: 500 });
   }
+}
+
+export async function DELETE() {
+  return POST();
 }
