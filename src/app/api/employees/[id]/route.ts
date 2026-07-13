@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { sql } from 'drizzle-orm';
 
+const n = (v: any) => (v === undefined || v === null || v === '') ? null : v;
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -33,9 +35,9 @@ export async function PUT(
     await db.execute(sql`
       UPDATE employees SET
         name = ${name},
-        email = ${email || null},
-        department = ${department || null},
-        position = ${position || null},
+        email = ${n(email)},
+        department = ${n(department)},
+        position = ${n(position)},
         is_active = ${isActive ?? true},
         updated_at = NOW()
       WHERE id = ${id}::uuid

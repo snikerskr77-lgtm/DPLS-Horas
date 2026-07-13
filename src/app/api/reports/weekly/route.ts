@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
-import { timeEntries, employees } from '@/db/schema';
-import { eq, and, gte, lte, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { startOfWeek, endOfWeek, format, eachDayOfInterval, parseISO } from 'date-fns';
 import { formatMinutesToHours, todayInPortugal } from '@/lib/utils';
 
@@ -10,63 +9,61 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const dateParam = searchParams.get('date') || todayInPortugal();
     const date = parseISO(dateParam);
-    
+
     const weekStart = startOfWeek(date, { weekStartsOn: 0 });
     const weekEnd = endOfWeek(date, { weekStartsOn: 0 });
-    
+
     const startStr = format(weekStart, 'yyyy-MM-dd');
     const endStr = format(weekEnd, 'yyyy-MM-dd');
 
-    // Get all employees
-    const allEmployees = await db.select().from(employees).where(eq(employees.isActive, true));
+    // Buscar funcionários ativos
+    const employeesData = await db.execute(sql`
+      SELECT id::text, name FROM employees WHERE is_active = true ORDER BY name
+    `);
 
-    // Get time entries for the week
-    const entries = await db
-      .select({
-        employeeId: timeEntries.employeeId,
-        employeeName: employees.name,
-        date: timeEntries.date,
-        totalMinutes: timeEntries.totalMinutes,
-        entryTime: timeEntries.entryTime,
-        exitTime: timeEntries.exitTime,
-        alerts: timeEntries.alerts,
-      })
-      .from(timeEntries)
-      .leftJoin(employees, eq(timeEntries.employeeId, employees.id))
-      .where(and(gte(timeEntries.date, startStr), lte(timeEntries.date, endStr)));
+    // Buscar registos da semana
+    const entries = await db.execute(sql`
+      SELECT te.employee_id, e.name as employee_name,
+             te.date, te.entry_time, te.exit_time,
+             te.total_minutes, te.alerts
+      FROM time_entries te
+      LEFT JOIN employees e ON te.employee_id = e.id
+      WHERE te.date >= ${startStr}::date AND te.date <= ${endStr}::date
+      ORDER BY e.name, te.date
+    `);
 
-    // Get all days of the week
     const weekDays = eachDayOfInterval({ start: weekStart, end: weekEnd });
     const weekDayStrings = weekDays.map(d => format(d, 'yyyy-MM-dd'));
 
-    // Group entries by employee
+    // Agrupar registos por funcionário
     const employeeEntries: Record<string, {
       name: string;
       entries: Record<string, { totalMinutes: number; entryTime: string; exitTime: string | null; alerts: string | null }>;
     }> = {};
 
-    for (const emp of allEmployees) {
-      employeeEntries[emp.id] = {
-        name: emp.name,
-        entries: {},
-      };
+    for (const emp of employeesData.rows as Array<{ id: string; name: string }>) {
+      employeeEntries[emp.id] = { name: emp.name, entries: {} };
     }
 
-    for (const entry of entries) {
-      if (entry.employeeId && employeeEntries[entry.employeeId]) {
-        employeeEntries[entry.employeeId].entries[entry.date] = {
-          totalMinutes: entry.totalMinutes || 0,
-          entryTime: entry.entryTime,
-          exitTime: entry.exitTime,
-          alerts: entry.alerts,
+    for (const row of entries.rows as Array<{
+      employee_id: string; employee_name: string; date: string;
+      entry_time: string; exit_time: string | null;
+      total_minutes: number; alerts: string | null;
+    }>) {
+      const eid: string = row.employee_id;
+      if (employeeEntries[eid]) {
+        employeeEntries[eid].entries[row.date] = {
+          totalMinutes: Number(row.total_minutes || 0),
+          entryTime: row.entry_time,
+          exitTime: row.exit_time,
+          alerts: row.alerts,
         };
       }
     }
 
-    // Build report
+    // Construir relatório
     const report = Object.entries(employeeEntries).map(([employeeId, data]) => {
-      const daysWorked = Object.keys(data.entries).length;
-      const totalMinutes = Object.values(data.entries).reduce((sum, e) => sum + e.totalMinutes, 0);
+      const totalMinutes = Object.values(data.entries).reduce((s, e) => s + e.totalMinutes, 0);
       const missingDays = weekDayStrings.filter(day => !data.entries[day]);
       const hasAlerts = Object.values(data.entries).some(e => e.alerts);
 
@@ -74,7 +71,7 @@ export async function GET(request: NextRequest) {
         employeeId,
         employeeName: data.name,
         weekRange: `${format(weekStart, 'dd/MM')} - ${format(weekEnd, 'dd/MM')}`,
-        daysWorked,
+        daysWorked: Object.keys(data.entries).length,
         missingDays: missingDays.length,
         missingDaysList: missingDays.map(d => format(parseISO(d), 'dd/MM')),
         totalMinutes,
@@ -93,7 +90,7 @@ export async function GET(request: NextRequest) {
       report: report.sort((a, b) => a.employeeName.localeCompare(b.employeeName)),
     });
   } catch (error) {
-    console.error('Error generating weekly report:', error);
+    console.error('Erro no relatório:', error);
     return NextResponse.json({ error: 'Erro ao gerar relatório' }, { status: 500 });
   }
 }

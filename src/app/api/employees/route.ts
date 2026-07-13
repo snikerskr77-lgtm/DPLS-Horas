@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { sql } from 'drizzle-orm';
 
+// Converte undefined/empty para null (Neon trata null como SQL NULL)
+const n = (v: any) => (v === undefined || v === null || v === '') ? null : v;
+
 export async function GET() {
   try {
     const result = await db.execute(sql`
@@ -28,7 +31,7 @@ export async function POST(request: NextRequest) {
 
     await db.execute(sql`
       INSERT INTO employees (name, email, department, position)
-      VALUES (${name}, ${email || null}, ${department || null}, ${position || null})
+      VALUES (${name}, ${n(email)}, ${n(department)}, ${n(position)})
     `);
 
     const result = await db.execute(sql`
@@ -38,7 +41,8 @@ export async function POST(request: NextRequest) {
     `);
     return NextResponse.json(result.rows[0], { status: 201 });
   } catch (error) {
-    console.error('Error creating employee:', error);
-    return NextResponse.json({ error: 'Erro ao criar funcionário' }, { status: 500 });
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error('Error creating employee:', msg);
+    return NextResponse.json({ error: `Erro ao criar funcionário: ${msg}` }, { status: 500 });
   }
 }
