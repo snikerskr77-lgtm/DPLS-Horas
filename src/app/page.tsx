@@ -44,6 +44,7 @@ export default function DashboardPage() {
   const [clearing, setClearing] = useState(false);
   const [clearResult, setClearResult] = useState<{ success: boolean; message: string; stats?: { registosEliminados: number; faltasEliminadas: number; funcionariosEliminados: number } } | null>(null);
   const [confirmText, setConfirmText] = useState('');
+  const canClear = confirmText.trim().toUpperCase() === 'ELIMINAR';
 
   useEffect(() => {
     fetchDashboard();
@@ -321,10 +322,13 @@ export default function DashboardPage() {
                     <input
                       type="text"
                       value={confirmText}
-                      onChange={(e) => setConfirmText(e.target.value)}
+                      onChange={(e) => setConfirmText(e.target.value.toUpperCase())}
                       placeholder="ELIMINAR"
-                      className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm font-mono focus:outline-none focus:border-red-500/50 placeholder:text-gray-700"
+                      className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm font-mono uppercase focus:outline-none focus:border-red-500/50 placeholder:text-gray-700"
                     />
+                    <p className="mt-1 text-[10px] text-gray-600 font-mono">
+                      Podes escrever em minúsculas ou maiúsculas.
+                    </p>
                   </div>
 
                   <div className="flex justify-end gap-3 pt-2">
@@ -332,19 +336,19 @@ export default function DashboardPage() {
                     <Button
                       variant="danger"
                       loading={clearing}
-                      disabled={confirmText !== 'ELIMINAR'}
+                      disabled={!canClear}
                       icon={<Trash2 className="w-4 h-4" />}
                       onClick={async () => {
                         setClearing(true);
                         try {
-                          const res = await fetch('/api/clear-all', { method: 'POST' });
+                          const res = await fetch('/api/clear-all', { method: 'DELETE' });
                           const d = await res.json();
                           setClearResult(d);
-                          if (!d.success) {
-                            setClearResult({ success: false, message: d.error || 'Erro ao limpar dados' });
+                          if (d.success) {
+                            await fetchDashboard();
                           }
                         } catch {
-                          setClearResult({ success: false, message: 'Erro de conexão — verifique se o servidor está online' });
+                          setClearResult({ success: false, message: 'Erro de conexão' });
                         } finally {
                           setClearing(false);
                         }

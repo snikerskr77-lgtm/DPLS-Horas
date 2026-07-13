@@ -4,6 +4,7 @@ import { employees, timeEntries } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { parseTimeEntryMessage, extractAgentName } from '@/lib/discord-parser';
 import { getDiscordConfig } from '@/lib/get-discord-config';
+import { getErrorMessage, isMissingBreakTimesColumnError } from '@/lib/db-compat';
 import { 
   getChannel, 
   getAllChannelMessages, 
@@ -189,11 +190,6 @@ async function processMessage(content: string, agentName: string, stats: SyncSta
     ? JSON.stringify(parsed.alerts)
     : null;
 
-  // Guarda as pausas completas como JSON para cálculo correto
-  const breaksDataJson = parsed.breakTimes && parsed.breakTimes.length > 0
-    ? JSON.stringify(parsed.breakTimes)
-    : null;
-
   try {
     // Busca ou cria o funcionário
     let [employee] = await db
@@ -211,48 +207,69 @@ async function processMessage(content: string, agentName: string, stats: SyncSta
 
     // Verifica se já existe entrada para esta data
     const [existingEntry] = await db
-      .select()
+      .select({ id: timeEntries.id })
       .from(timeEntries)
       .where(and(
         eq(timeEntries.employeeId, employee.id),
         eq(timeEntries.date, parsed.date)
       ));
 
+    const baseValues = {
+      entryTime: parsed.entryTime,
+      exitTime: parsed.exitTime || null,
+      breakStart: parsed.breakTimes?.[0] || null,
+      breakEnd: parsed.breakTimes?.[1] || null,
+      totalMinutes: parsed.totalMinutes ?? 0,
+      alerts: alertsJson,
+      updatedAt: new Date(),
+    };
+
     if (existingEntry) {
       // Atualiza entrada existente
-      await db
-        .update(timeEntries)
-        .set({
-          entryTime: parsed.entryTime,
-          exitTime: parsed.exitTime || null,
-          breakStart: parsed.breakTimes?.[0] || null,
-          breakEnd: parsed.breakTimes?.[1] || null,
-          breaksData: breaksDataJson,
-          totalMinutes: parsed.totalMinutes ?? 0,
-          alerts: alertsJson,
-          updatedAt: new Date(),
-        })
-        .where(eq(timeEntries.id, existingEntry.id));
+      try {
+        await db
+          .update(timeEntries)
+          .set({
+            ...baseValues,
+            breakTimes: parsed.breakTimes?.length ? JSON.stringify(parsed.breakTimes) : null,
+          })
+          .where(eq(timeEntries.id, existingEntry.id));
+      } catch (error) {
+        if (!isMissingBreakTimesColumnError(error)) throw error;
+        await db
+          .update(timeEntries)
+          .set(baseValues)
+          .where(eq(timeEntries.id, existingEntry.id));
+      }
       stats.entriesUpdated++;
     } else {
       // Cria nova entrada
-      await db
-        .insert(timeEntries)
-        .values({
-          employeeId: employee.id,
-          date: parsed.date,
-          entryTime: parsed.entryTime,
-          exitTime: parsed.exitTime || null,
-          breakStart: parsed.breakTimes?.[0] || null,
-          breakEnd: parsed.breakTimes?.[1] || null,
-          breaksData: breaksDataJson,
-          totalMinutes: parsed.totalMinutes ?? 0,
-          alerts: alertsJson,
-        });
+      const insertBaseValues = {
+        employeeId: employee.id,
+        date: parsed.date,
+        entryTime: parsed.entryTime,
+        exitTime: parsed.exitTime || null,
+        breakStart: parsed.breakTimes?.[0] || null,
+        breakEnd: parsed.breakTimes?.[1] || null,
+        totalMinutes: parsed.totalMinutes ?? 0,
+        alerts: alertsJson,
+      };
+
+      try {
+        await db
+          .insert(timeEntries)
+          .values({
+            ...insertBaseValues,
+            breakTimes: parsed.breakTimes?.length ? JSON.stringify(parsed.breakTimes) : null,
+          });
+      } catch (error) {
+        if (!isMissingBreakTimesColumnError(error)) throw error;
+        await db.insert(timeEntries).values(insertBaseValues);
+      }
       stats.entriesCreated++;
     }
   } catch (error) {
-    stats.errors.push(`Erro ao processar mensagem de ${agentName}: ${error}`);
+    stats.errors.push(`Erro ao processar mensagem de ${agentName}: ${getErrorMessage(error)}`);
   }
 }
 
