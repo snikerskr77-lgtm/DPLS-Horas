@@ -208,97 +208,114 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   }
 
   // ========== 4. EXTRAI PAUSAS ==========
-  // Regras pedidas:
-  // - Pausa é opcional
-  // - Se existir um horário de pausa válido, pode servir para fechar o período parcial
-  // - Se um horário de pausa não termina em 0 ou 5, fica vermelho e NÃO entra no cálculo
-  // - Não mostrar aviso amarelo de "pausa isolada"
-  const breakTimes: string[] = [];
-  const pausePairRegex = /Pausa\s*[:]?\s*(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})/gi;
-  let pausePairMatch;
+  // Regras:
+  // - Pausa é opcional — sem pausa = verde/OK
+  // - Suporta múltiplas pausas: "Pausa: 17:00 - 18:00 : 21:25 - 22:35"
+  // - Suporta formato simples: "Pausa: 04:15"
+  // - Horário que não termina em 0 ou 5 = erro vermelho, NÃO entra no cálculo
   
-  while ((pausePairMatch = pausePairRegex.exec(cleanText)) !== null) {
-    const bt1 = pausePairMatch[1].trim();
-    const bt2 = pausePairMatch[2].trim();
+  // Primeiro encontra a linha toda de pausa
+  const breakTimes: string[] = []; // só horários válidos (terminam em 0/5)
+  const allBreakTimes: string[] = []; // todos os horários encontrados
+  
+  const pauseLineRegex = /Pausa\s*[:]?\s*(.+)/i;
+  const pauseLineMatch = cleanText.match(pauseLineRegex);
+  
+  if (pauseLineMatch) {
+    const pauseContent = pauseLineMatch[1];
+    // Extrai TODOS os pares HH:MM - HH:MM da linha
+    const pairRegex = /(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})/g;
+    let pairMatch;
     
-    if (isValidTime(bt1)) {
-      if (validateTimeMinutes(bt1)) {
-        breakTimes.push(bt1);
-      } else {
-        alerts.push({
-          level: 'error',
-          code: 'BREAK_NOT_ROUND',
-          message: `Início pausa ${bt1} não termina em 0 ou 5 — não entra no cálculo`,
-          field: 'pausa',
-        });
+    while ((pairMatch = pairRegex.exec(pauseContent)) !== null) {
+      const bt1 = pairMatch[1].trim();
+      const bt2 = pairMatch[2].trim();
+      
+      for (const bt of [bt1, bt2]) {
+        if (isValidTime(bt)) {
+          allBreakTimes.push(bt);
+          if (validateTimeMinutes(bt)) {
+            breakTimes.push(bt);
+          } else {
+            alerts.push({
+              level: 'error',
+              code: 'BREAK_NOT_ROUND',
+              message: `Pausa ${bt} não termina em 0 ou 5 — não entra no cálculo`,
+              field: 'pausa',
+            });
+          }
+        }
       }
     }
-
-    if (isValidTime(bt2)) {
-      if (validateTimeMinutes(bt2)) {
-        breakTimes.push(bt2);
-      } else {
-        alerts.push({
-          level: 'error',
-          code: 'BREAK_NOT_ROUND',
-          message: `Fim pausa ${bt2} não termina em 0 ou 5 — não entra no cálculo`,
-          field: 'pausa',
-        });
-      }
-    }
-  }
-
-  // Se não encontrou pares, tenta formato simples "Pausa: HH:MM"
-  if (breakTimes.length === 0) {
-    const pauseSingleRegex = /Pausa\s*[:]?\s*(\d{1,2}:\d{2})/gi;
-    let pauseSingleMatch;
     
-    while ((pauseSingleMatch = pauseSingleRegex.exec(cleanText)) !== null) {
-      const bt = pauseSingleMatch[1].trim();
-      if (isValidTime(bt)) {
-        if (validateTimeMinutes(bt)) {
-          breakTimes.push(bt);
-        } else {
-          alerts.push({
-            level: 'error',
-            code: 'BREAK_NOT_ROUND',
-            message: `Pausa ${bt} não termina em 0 ou 5 — não entra no cálculo`,
-            field: 'pausa',
-          });
+    // Se não encontrou pares, tenta horários soltos
+    if (allBreakTimes.length === 0) {
+      const singleRegex = /(\d{1,2}:\d{2})/g;
+      let singleMatch;
+      while ((singleMatch = singleRegex.exec(pauseContent)) !== null) {
+        const bt = singleMatch[1].trim();
+        if (isValidTime(bt)) {
+          allBreakTimes.push(bt);
+          if (validateTimeMinutes(bt)) {
+            breakTimes.push(bt);
+          } else {
+            alerts.push({
+              level: 'error',
+              code: 'BREAK_NOT_ROUND',
+              message: `Pausa ${bt} não termina em 0 ou 5 — não entra no cálculo`,
+              field: 'pausa',
+            });
+          }
         }
       }
     }
   }
 
   // ========== 5. CALCULA TOTAL ==========
+  // Lógica: construir períodos de trabalho sequenciais
+  // Entrada → Pausa1Start = trabalho
+  // Pausa1End → Pausa2Start = trabalho
+  // Pausa2End → Saída = trabalho
+  // Suporta turnos noturnos (cruza meia-noite)
   let totalMinutes: number | undefined;
   let totalFormatted: string | undefined;
 
   if (entryTime) {
-    // Constrói lista de todos os horários conhecidos
-    const times: number[] = [];
-    times.push(timeToMinutes(entryTime));
-
-    if (exitTime) {
-      times.push(timeToMinutes(exitTime));
-    }
-
+    // Constrói sequência: [entrada, pausa1_inicio, pausa1_fim, pausa2_inicio, pausa2_fim, ..., saída]
+    const sequence: number[] = [];
+    const entryMin = timeToMinutes(entryTime);
+    sequence.push(entryMin);
+    
     for (const bt of breakTimes) {
-      times.push(timeToMinutes(bt));
+      sequence.push(timeToMinutes(bt));
+    }
+    
+    if (exitTime) {
+      sequence.push(timeToMinutes(exitTime));
     }
 
-    times.sort((a, b) => a - b);
+    if (sequence.length >= 2) {
+      // Ajusta para turnos noturnos: se um horário é "antes" do anterior,
+      // significa que cruzou meia-noite, então soma 1440
+      const adjusted: number[] = [sequence[0]];
+      for (let i = 1; i < sequence.length; i++) {
+        let val = sequence[i];
+        // Se este valor é menor que o anterior, cruzou meia-noite
+        if (val < adjusted[i - 1]) {
+          val += 1440;
+        }
+        adjusted.push(val);
+      }
 
-    // Se não tem saída mas tem pausas, calcula horas parciais
-    // Ex: entrada 00:40, pausa 04:15-05:03 → conta 00:40 até 04:15 (3h35m)
-    // Se tem saída, calcula normalmente com todos os períodos
-    if (exitTime || breakTimes.length > 0) {
+      // Calcula: soma dos períodos de trabalho (pares: trabalho, pausa, trabalho, pausa, ...)
+      // [entrada, p1start] = trabalho
+      // [p1start, p1end] = pausa (não conta)
+      // [p1end, p2start] = trabalho
+      // etc.
       totalMinutes = 0;
-      for (let i = 0; i < times.length - 1; i += 2) {
-        if (i + 1 < times.length) {
-          let diff = times[i + 1] - times[i];
-          if (diff < 0) diff += 1440;
-          totalMinutes += diff;
+      for (let i = 0; i < adjusted.length - 1; i += 2) {
+        if (i + 1 < adjusted.length) {
+          totalMinutes += adjusted[i + 1] - adjusted[i];
         }
       }
 
@@ -310,12 +327,12 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
         totalFormatted += ' (parcial)';
       }
 
-      // Alertas adicionais de validação
+      // Alertas de validação
       if (totalMinutes > 16 * 60) {
         alerts.push({
           level: 'warning',
           code: 'EXCESSIVE_HOURS',
-          message: `Total de ${totalFormatted} excede 16 horas — verificar se os horários estão corretos`,
+          message: `Total de ${totalFormatted} excede 16 horas — verificar horários`,
           field: 'total',
         });
       }

@@ -29,11 +29,9 @@ export function timeToMinutes(time: string): number {
 }
 
 // Calculate work minutes from entry/exit/break times
-// Regras:
-// - sem saída => 0 (as entradas Discord usam o parser avançado para parcial)
-// - sem pausa => entrada até saída normal
-// - pausa inválida (não termina em 0 ou 5) não entra no cálculo
-// - se há início de pausa válido mas fim inválido/ausente, conta só até ao início da pausa
+// Usa mesma lógica sequencial do parser Discord
+// Sequência: [entrada, pausaInicio, pausaFim, saída]
+// Períodos de trabalho = pares: [entrada→pausaInicio], [pausaFim→saída]
 export function calculateWorkMinutes(
   entryTime: string,
   exitTime: string | null,
@@ -42,50 +40,41 @@ export function calculateWorkMinutes(
 ): number {
   if (!exitTime) return 0;
 
-  const entryMinutes = timeToMinutes(entryTime);
-  let exitMinutes = timeToMinutes(exitTime);
-
-  // Handle overnight shifts
-  if (exitMinutes < entryMinutes) {
-    exitMinutes += 24 * 60;
-  }
-
-  // Se não tem pausa, conta normal
-  if (!breakStart && !breakEnd) {
-    return Math.max(0, exitMinutes - entryMinutes);
-  }
+  // Constrói sequência
+  const sequence: number[] = [];
+  sequence.push(timeToMinutes(entryTime));
 
   const hasValidBreakStart = !!breakStart && validateTimeMinutes(breakStart);
   const hasValidBreakEnd = !!breakEnd && validateTimeMinutes(breakEnd);
 
-  // Se só existe um início de pausa válido, conta até aí e ignora o resto
-  if (hasValidBreakStart && !hasValidBreakEnd) {
-    let breakStartMinutes = timeToMinutes(breakStart!);
-    if (breakStartMinutes < entryMinutes) {
-      breakStartMinutes += 24 * 60;
+  if (hasValidBreakStart) {
+    sequence.push(timeToMinutes(breakStart!));
+  }
+  if (hasValidBreakEnd) {
+    sequence.push(timeToMinutes(breakEnd!));
+  }
+
+  sequence.push(timeToMinutes(exitTime));
+
+  // Ajusta para turnos noturnos
+  const adjusted: number[] = [sequence[0]];
+  for (let i = 1; i < sequence.length; i++) {
+    let val = sequence[i];
+    if (val < adjusted[i - 1]) {
+      val += 1440;
     }
-    return Math.max(0, breakStartMinutes - entryMinutes);
+    adjusted.push(val);
   }
 
-  // Se só existe fim de pausa válido mas não início válido, ignora a pausa
-  if (!hasValidBreakStart && hasValidBreakEnd) {
-    return Math.max(0, exitMinutes - entryMinutes);
-  }
-
-  // Se ambas as pausas são válidas, subtrai normalmente
-  let totalMinutes = exitMinutes - entryMinutes;
-  if (hasValidBreakStart && hasValidBreakEnd) {
-    const breakStartMinutes = timeToMinutes(breakStart!);
-    let breakEndMinutes = timeToMinutes(breakEnd!);
-
-    if (breakEndMinutes < breakStartMinutes) {
-      breakEndMinutes += 24 * 60;
+  // Soma períodos de trabalho (pares)
+  let total = 0;
+  for (let i = 0; i < adjusted.length - 1; i += 2) {
+    if (i + 1 < adjusted.length) {
+      total += adjusted[i + 1] - adjusted[i];
     }
-
-    totalMinutes -= (breakEndMinutes - breakStartMinutes);
   }
 
-  return Math.max(0, totalMinutes);
+  return Math.max(0, total);
 }
 
 // Check if time ends in 0 or 5 minutes
