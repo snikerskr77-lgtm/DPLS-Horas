@@ -15,7 +15,7 @@ import type { Employee } from '@/db/schema';
 interface TimeEntry {
   id: string; employeeId: string; employeeName: string | null; date: string;
   entryTime: string; exitTime: string | null; breakStart: string | null;
-  breakEnd: string | null; totalMinutes: number | null; notes: string | null; alerts: string | null;
+  breakEnd: string | null; breaksData: string | null; totalMinutes: number | null; notes: string | null; alerts: string | null;
 }
 
 export default function TimeEntriesPage() {
@@ -151,7 +151,22 @@ export default function TimeEntriesPage() {
                           <span className="px-2 py-0.5 bg-green-500/10 text-green-400 border border-green-500/30 rounded text-xs font-mono font-bold">{entry.exitTime}</span>
                         )}
                       </td>
-                      <td className="py-3 px-4 text-xs font-mono text-gray-500">{entry.breakStart && entry.breakEnd ? `${entry.breakStart} - ${entry.breakEnd}` : '-'}</td>
+                      <td className="py-3 px-4 text-xs font-mono text-gray-500">
+                        {(() => {
+                          // Se tem breaksData, mostra sequência completa
+                          if (entry.breaksData) {
+                            try {
+                              const breaks: string[] = JSON.parse(entry.breaksData);
+                              const pairs: string[] = [];
+                              for (let i = 0; i < breaks.length - 1; i += 2) {
+                                pairs.push(`${breaks[i]}-${breaks[i+1]}`);
+                              }
+                              return pairs.join(' | ');
+                            } catch {}
+                          }
+                          return entry.breakStart && entry.breakEnd ? `${entry.breakStart} - ${entry.breakEnd}` : '-';
+                        })()}
+                      </td>
                       <td className="py-3 px-4"><span className={`text-sm font-extrabold font-mono ${hasErrors ? 'text-red-400' : isClean ? 'text-green-400' : 'text-amber-400'}`}>{entry.totalMinutes ? formatMinutesToHours(entry.totalMinutes) : '—'}</span></td>
                       <td className="py-3 px-4">
                         {isClean ? (

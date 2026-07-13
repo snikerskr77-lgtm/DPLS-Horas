@@ -11,10 +11,10 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { entryTime, exitTime, breakStart, breakEnd, notes } = body;
+    const { entryTime, exitTime, breakStart, breakEnd, breaksData, notes } = body;
 
-    // Calculate total minutes
-    const totalMinutes = calculateWorkMinutes(entryTime, exitTime, breakStart, breakEnd);
+    // Calculate total minutes (com breaksData se existir)
+    const totalMinutes = calculateWorkMinutes(entryTime, exitTime, breakStart, breakEnd, breaksData);
 
     // Generate alerts (rich format)
     const alerts: Array<{ level: string; code: string; message: string; field?: string }> = [];
@@ -41,6 +41,7 @@ export async function PUT(
         exitTime: exitTime || null,
         breakStart: breakStart || null,
         breakEnd: breakEnd || null,
+        breaksData: breaksData || null,
         totalMinutes,
         notes: notes || null,
         alerts: alerts.length > 0 ? JSON.stringify(alerts) : null,

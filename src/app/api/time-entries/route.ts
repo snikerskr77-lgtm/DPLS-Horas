@@ -59,7 +59,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { employeeId, date, entryTime, exitTime, breakStart, breakEnd, notes } = body;
+    const { employeeId, date, entryTime, exitTime, breakStart, breakEnd, breaksData, notes } = body;
 
     if (!employeeId || !date || !entryTime) {
       return NextResponse.json({ error: 'Funcionário, data e entrada são obrigatórios' }, { status: 400 });
@@ -75,8 +75,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Já existe um registo para esta data' }, { status: 409 });
     }
 
-    // Calculate total minutes
-    const totalMinutes = calculateWorkMinutes(entryTime, exitTime, breakStart, breakEnd);
+    // Calculate total minutes (com breaksData se existir)
+    const totalMinutes = calculateWorkMinutes(entryTime, exitTime, breakStart, breakEnd, breaksData);
 
     // Generate alerts (rich format matching parser)
     const alerts: Array<{ level: string; code: string; message: string; field?: string }> = [];
@@ -105,6 +105,7 @@ export async function POST(request: NextRequest) {
         exitTime: exitTime || null,
         breakStart: breakStart || null,
         breakEnd: breakEnd || null,
+        breaksData: breaksData || null,
         totalMinutes,
         notes: notes || null,
         alerts: alerts.length > 0 ? JSON.stringify(alerts) : null,

@@ -210,63 +210,42 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   // ========== 4. EXTRAI PAUSAS ==========
   // Regras:
   // - Pausa é opcional — sem pausa = verde/OK
-  // - Suporta múltiplas pausas: "Pausa: 17:00 - 18:00 : 21:25 - 22:35"
-  // - Suporta formato simples: "Pausa: 04:15"
+  // - Aceita qualquer sequência de horários na linha da pausa
+  //   Ex.: "13:50/16:00-17:00/21:00"
+  //   vira [13:50, 16:00, 17:00, 21:00]
+  // - A ordem dos horários é preservada para o cálculo
   // - Horário que não termina em 0 ou 5 = erro vermelho, NÃO entra no cálculo
-  
-  // Primeiro encontra a linha toda de pausa
   const breakTimes: string[] = []; // só horários válidos (terminam em 0/5)
-  const allBreakTimes: string[] = []; // todos os horários encontrados
-  
-  const pauseLineRegex = /Pausa\s*[:]?\s*(.+)/i;
+
+  const pauseLineRegex = /Pausa\s*[:]?\s*([^\n\r]+)/i;
   const pauseLineMatch = cleanText.match(pauseLineRegex);
-  
+
   if (pauseLineMatch) {
-    const pauseContent = pauseLineMatch[1];
-    // Extrai TODOS os pares HH:MM - HH:MM da linha
-    const pairRegex = /(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})/g;
-    let pairMatch;
-    
-    while ((pairMatch = pairRegex.exec(pauseContent)) !== null) {
-      const bt1 = pairMatch[1].trim();
-      const bt2 = pairMatch[2].trim();
-      
-      for (const bt of [bt1, bt2]) {
-        if (isValidTime(bt)) {
-          allBreakTimes.push(bt);
-          if (validateTimeMinutes(bt)) {
-            breakTimes.push(bt);
-          } else {
-            alerts.push({
-              level: 'error',
-              code: 'BREAK_NOT_ROUND',
-              message: `Pausa ${bt} não termina em 0 ou 5 — não entra no cálculo`,
-              field: 'pausa',
-            });
-          }
-        }
+    const pauseContent = pauseLineMatch[1].trim();
+    const allTimesRegex = /(\d{1,2}:\d{2})/g;
+    let timeMatch;
+
+    while ((timeMatch = allTimesRegex.exec(pauseContent)) !== null) {
+      const bt = timeMatch[1].trim();
+      if (!isValidTime(bt)) {
+        alerts.push({
+          level: 'error',
+          code: 'INVALID_BREAK_TIME',
+          message: `Horário de pausa inválido: ${bt}`,
+          field: 'pausa',
+        });
+        continue;
       }
-    }
-    
-    // Se não encontrou pares, tenta horários soltos
-    if (allBreakTimes.length === 0) {
-      const singleRegex = /(\d{1,2}:\d{2})/g;
-      let singleMatch;
-      while ((singleMatch = singleRegex.exec(pauseContent)) !== null) {
-        const bt = singleMatch[1].trim();
-        if (isValidTime(bt)) {
-          allBreakTimes.push(bt);
-          if (validateTimeMinutes(bt)) {
-            breakTimes.push(bt);
-          } else {
-            alerts.push({
-              level: 'error',
-              code: 'BREAK_NOT_ROUND',
-              message: `Pausa ${bt} não termina em 0 ou 5 — não entra no cálculo`,
-              field: 'pausa',
-            });
-          }
-        }
+
+      if (validateTimeMinutes(bt)) {
+        breakTimes.push(bt);
+      } else {
+        alerts.push({
+          level: 'error',
+          code: 'BREAK_NOT_ROUND',
+          message: `Pausa ${bt} não termina em 0 ou 5 — não entra no cálculo`,
+          field: 'pausa',
+        });
       }
     }
   }

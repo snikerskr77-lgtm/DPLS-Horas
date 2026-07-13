@@ -28,30 +28,40 @@ export function timeToMinutes(time: string): number {
   return hours * 60 + minutes;
 }
 
-// Calculate work minutes from entry/exit/break times
-// Usa mesma lógica sequencial do parser Discord
-// Sequência: [entrada, pausaInicio, pausaFim, saída]
-// Períodos de trabalho = pares: [entrada→pausaInicio], [pausaFim→saída]
+// Calculate work minutes from entry/exit/breaks
+// Suporta breaksData (array completo de horários de pausa)
+// Fallback para breakStart/breakEnd (1 única pausa)
 export function calculateWorkMinutes(
   entryTime: string,
   exitTime: string | null,
   breakStart?: string | null,
-  breakEnd?: string | null
+  breakEnd?: string | null,
+  breaksData?: string | null // JSON array com todos os HH:MM das pausas
 ): number {
   if (!exitTime) return 0;
 
-  // Constrói sequência
+  // Constrói sequência de horários
   const sequence: number[] = [];
   sequence.push(timeToMinutes(entryTime));
 
-  const hasValidBreakStart = !!breakStart && validateTimeMinutes(breakStart);
-  const hasValidBreakEnd = !!breakEnd && validateTimeMinutes(breakEnd);
-
-  if (hasValidBreakStart) {
-    sequence.push(timeToMinutes(breakStart!));
-  }
-  if (hasValidBreakEnd) {
-    sequence.push(timeToMinutes(breakEnd!));
+  if (breaksData) {
+    // Usa a lista completa de horários de pausa
+    try {
+      const breaks: string[] = JSON.parse(breaksData);
+      for (const bt of breaks) {
+        if (validateTimeMinutes(bt)) {
+          sequence.push(timeToMinutes(bt));
+        }
+      }
+    } catch { /* fallback para baixo */ }
+  } else {
+    // Fallback: apenas breakStart/breakEnd (1 pausa)
+    if (breakStart && validateTimeMinutes(breakStart)) {
+      sequence.push(timeToMinutes(breakStart));
+    }
+    if (breakEnd && validateTimeMinutes(breakEnd)) {
+      sequence.push(timeToMinutes(breakEnd));
+    }
   }
 
   sequence.push(timeToMinutes(exitTime));

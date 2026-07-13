@@ -30,8 +30,9 @@ export const timeEntries = pgTable("time_entries", {
   date: date("date").notNull(),
   entryTime: varchar("entry_time", { length: 5 }).notNull(), // HH:MM format
   exitTime: varchar("exit_time", { length: 5 }), // HH:MM format, nullable for ongoing
-  breakStart: varchar("break_start", { length: 5 }), // HH:MM format
-  breakEnd: varchar("break_end", { length: 5 }), // HH:MM format
+  breakStart: varchar("break_start", { length: 5 }), // HH:MM format (first break start, legacy)
+  breakEnd: varchar("break_end", { length: 5 }), // HH:MM format (first break end, legacy)
+  breaksData: text("breaks_data"), // JSON array de horários de pausa completos: ["HH:MM","HH:MM","HH:MM","HH:MM"]
   totalMinutes: integer("total_minutes").default(0),
   notes: text("notes"),
   alerts: text("alerts"), // JSON array of alert strings

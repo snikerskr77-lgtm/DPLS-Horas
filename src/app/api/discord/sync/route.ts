@@ -189,6 +189,11 @@ async function processMessage(content: string, agentName: string, stats: SyncSta
     ? JSON.stringify(parsed.alerts)
     : null;
 
+  // Guarda as pausas completas como JSON para cálculo correto
+  const breaksDataJson = parsed.breakTimes && parsed.breakTimes.length > 0
+    ? JSON.stringify(parsed.breakTimes)
+    : null;
+
   try {
     // Busca ou cria o funcionário
     let [employee] = await db
@@ -222,6 +227,7 @@ async function processMessage(content: string, agentName: string, stats: SyncSta
           exitTime: parsed.exitTime || null,
           breakStart: parsed.breakTimes?.[0] || null,
           breakEnd: parsed.breakTimes?.[1] || null,
+          breaksData: breaksDataJson,
           totalMinutes: parsed.totalMinutes ?? 0,
           alerts: alertsJson,
           updatedAt: new Date(),
@@ -239,6 +245,7 @@ async function processMessage(content: string, agentName: string, stats: SyncSta
           exitTime: parsed.exitTime || null,
           breakStart: parsed.breakTimes?.[0] || null,
           breakEnd: parsed.breakTimes?.[1] || null,
+          breaksData: breaksDataJson,
           totalMinutes: parsed.totalMinutes ?? 0,
           alerts: alertsJson,
         });
