@@ -15,7 +15,7 @@ import type { Employee } from '@/db/schema';
 interface TimeEntry {
   id: string; employeeId: string; employeeName: string | null; date: string;
   entryTime: string; exitTime: string | null; breakStart: string | null;
-  breakEnd: string | null; breakTimes?: string | null; totalMinutes: number | null; notes: string | null; alerts: string | null;
+  breakEnd: string | null; breaksData: string | null; totalMinutes: number | null; notes: string | null; alerts: string | null;
 }
 
 export default function TimeEntriesPage() {
@@ -120,19 +120,6 @@ export default function TimeEntriesPage() {
                       }
                     } catch { /* ignore */ }
                   }
-                  let breakList: string[] = [];
-                  if (entry.breakTimes) {
-                    try {
-                      const rawBreaks = JSON.parse(entry.breakTimes);
-                      if (Array.isArray(rawBreaks)) {
-                        breakList = rawBreaks;
-                      }
-                    } catch { /* ignore */ }
-                  }
-                  if (breakList.length === 0) {
-                    breakList = [entry.breakStart, entry.breakEnd].filter(Boolean) as string[];
-                  }
-
                   const errorCount = parsedAlerts.filter(a => a.level === 'error').length;
                   const warnCount = parsedAlerts.filter(a => a.level !== 'error').length;
                   const hasErrors = errorCount > 0;
@@ -165,16 +152,20 @@ export default function TimeEntriesPage() {
                         )}
                       </td>
                       <td className="py-3 px-4 text-xs font-mono text-gray-500">
-                        {breakList.length >= 2
-                          ? breakList.reduce<string[]>((acc, time, index) => {
-                              if (index % 2 === 0 && breakList[index + 1]) {
-                                acc.push(`${time} - ${breakList[index + 1]}`);
+                        {(() => {
+                          // Se tem breaksData, mostra sequência completa
+                          if (entry.breaksData) {
+                            try {
+                              const breaks: string[] = JSON.parse(entry.breaksData);
+                              const pairs: string[] = [];
+                              for (let i = 0; i < breaks.length - 1; i += 2) {
+                                pairs.push(`${breaks[i]}-${breaks[i+1]}`);
                               }
-                              return acc;
-                            }, []).join(' | ')
-                          : breakList.length === 1
-                            ? breakList[0]
-                            : '-'}
+                              return pairs.join(' | ');
+                            } catch {}
+                          }
+                          return entry.breakStart && entry.breakEnd ? `${entry.breakStart} - ${entry.breakEnd}` : '-';
+                        })()}
                       </td>
                       <td className="py-3 px-4"><span className={`text-sm font-extrabold font-mono ${hasErrors ? 'text-red-400' : isClean ? 'text-green-400' : 'text-amber-400'}`}>{entry.totalMinutes ? formatMinutesToHours(entry.totalMinutes) : '—'}</span></td>
                       <td className="py-3 px-4">
