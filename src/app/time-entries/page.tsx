@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Plus, Clock, AlertTriangle, Edit2, Trash2, ChevronLeft, ChevronRight, XCircle, CheckCircle } from 'lucide-react';
 import Button from '@/components/Button';
 import Modal from '@/components/Modal';
@@ -9,21 +10,23 @@ import Select from '@/components/Select';
 import TimeInput from '@/components/TimeInput';
 import DateInput from '@/components/DateInput';
 import { format, startOfWeek, endOfWeek, addWeeks, subWeeks, parseISO } from 'date-fns';
-import { formatMinutesToHours, nowInPortugal, todayInPortugal } from '@/lib/utils';
+import { decodeTimeTrackMeta, formatMinutesToHours, nowInPortugal, todayInPortugal } from '@/lib/utils';
 import type { Employee } from '@/db/schema';
 
 interface TimeEntry {
   id: string; employeeId: string; employeeName: string | null; date: string;
   entryTime: string; exitTime: string | null; breakStart: string | null;
-  breakEnd: string | null; breaksData: string | null; totalMinutes: number | null; notes: string | null; alerts: string | null;
+  breakEnd: string | null; breakTimes?: string | null; totalMinutes: number | null; notes: string | null; alerts: string | null;
 }
 
 export default function TimeEntriesPage() {
+  const router = useRouter();
   const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentDate, setCurrentDate] = useState(nowInPortugal());
   const [selectedEmployee, setSelectedEmployee] = useState('');
+  const [showAllWeeks, setShowAllWeeks] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<TimeEntry | null>(null);
   const [formData, setFormData] = useState({ employeeId: '', date: todayInPortugal(), entryTime: '', exitTime: '', breakStart: '', breakEnd: '', notes: '' });
@@ -34,20 +37,29 @@ export default function TimeEntriesPage() {
   const weekEnd = endOfWeek(currentDate, { weekStartsOn: 0 });
 
   useEffect(() => { fetchEmployees(); }, []);
-  useEffect(() => { fetchEntries(); }, [currentDate, selectedEmployee]);
+  useEffect(() => { fetchEntries(); }, [currentDate, selectedEmployee, showAllWeeks]);
 
   const fetchEmployees = async () => { try { setEmployees(await (await fetch('/api/employees')).json()); } catch (e) { console.error(e); } };
   const fetchEntries = async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ startDate: format(weekStart, 'yyyy-MM-dd'), endDate: format(weekEnd, 'yyyy-MM-dd') });
-      if (selectedEmployee) params.append('employeeId', selectedEmployee);
-      setEntries(await (await fetch(`/api/time-entries?${params}`)).json());
+      const params = new URLSearchParams();
+      if (!showAllWeeks) {
+        params.set('startDate', format(weekStart, 'yyyy-MM-dd'));
+        params.set('endDate', format(weekEnd, 'yyyy-MM-dd'));
+      }
+      if (selectedEmployee) params.set('employeeId', selectedEmployee);
+      const query = params.toString();
+      setEntries(await (await fetch(`/api/time-entries${query ? `?${query}` : ''}`)).json());
     } catch (e) { console.error(e); } finally { setLoading(false); }
   };
 
   const openModal = (entry?: TimeEntry) => {
     setError('');
+    if (!entry && employees.length === 0) {
+      router.push('/employees');
+      return;
+    }
     if (entry) { setEditingEntry(entry); setFormData({ employeeId: entry.employeeId, date: entry.date, entryTime: entry.entryTime, exitTime: entry.exitTime || '', breakStart: entry.breakStart || '', breakEnd: entry.breakEnd || '', notes: entry.notes || '' }); }
     else { setEditingEntry(null); setFormData({ employeeId: selectedEmployee || '', date: todayInPortugal(), entryTime: '', exitTime: '', breakStart: '', breakEnd: '', notes: '' }); }
     setIsModalOpen(true);
@@ -71,19 +83,28 @@ export default function TimeEntriesPage() {
           <h1 className="text-lg font-extrabold tracking-widest uppercase font-mono">Picagem de Ponto</h1>
           <p className="text-xs text-gray-400 font-mono mt-1">Registos de entrada e saída</p>
         </div>
-        <Button onClick={() => openModal()} icon={<Plus className="w-4 h-4" />}>Novo Registo</Button>
+        {employees.length > 0 ? (
+          <Button onClick={() => openModal()} icon={<Plus className="w-4 h-4" />}>Novo Registo</Button>
+        ) : (
+          <Button onClick={() => router.push('/employees')} icon={<Plus className="w-4 h-4" />}>Criar Funcionário Primeiro</Button>
+        )}
       </div>
 
       {/* Filters */}
       <div className="glass-card rounded-xl p-4">
         <div className="flex flex-col lg:flex-row lg:items-center gap-4">
-          <div className="flex items-center gap-2">
-            <button onClick={() => setCurrentDate(subWeeks(currentDate, 1))} className="p-2 hover:bg-white/5 rounded-lg transition-colors"><ChevronLeft className="w-4 h-4 text-gray-400" /></button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={() => { setShowAllWeeks(false); setCurrentDate(subWeeks(currentDate, 1)); }} disabled={showAllWeeks} className="p-2 hover:bg-white/5 rounded-lg transition-colors disabled:opacity-30"><ChevronLeft className="w-4 h-4 text-gray-400" /></button>
             <div className="px-4 py-2 bg-black/40 border border-white/10 rounded-lg">
-              <span className="text-xs font-bold font-mono text-gray-300">{format(weekStart, 'dd/MM')} - {format(weekEnd, 'dd/MM/yyyy')}</span>
+              <span className="text-xs font-bold font-mono text-gray-300">
+                {showAllWeeks ? 'TODOS OS REGISTOS' : `${format(weekStart, 'dd/MM')} - ${format(weekEnd, 'dd/MM/yyyy')}`}
+              </span>
             </div>
-            <button onClick={() => setCurrentDate(addWeeks(currentDate, 1))} className="p-2 hover:bg-white/5 rounded-lg transition-colors"><ChevronRight className="w-4 h-4 text-gray-400" /></button>
-            <Button variant="ghost" size="sm" onClick={() => setCurrentDate(nowInPortugal())}>Hoje</Button>
+            <button onClick={() => { setShowAllWeeks(false); setCurrentDate(addWeeks(currentDate, 1)); }} disabled={showAllWeeks} className="p-2 hover:bg-white/5 rounded-lg transition-colors disabled:opacity-30"><ChevronRight className="w-4 h-4 text-gray-400" /></button>
+            <Button variant="ghost" size="sm" onClick={() => { setShowAllWeeks(false); setCurrentDate(nowInPortugal()); }}>Hoje</Button>
+            <Button variant={showAllWeeks ? 'primary' : 'secondary'} size="sm" onClick={() => setShowAllWeeks(v => !v)}>
+              {showAllWeeks ? 'Ver Semana Atual' : 'Ver Tudo'}
+            </Button>
           </div>
           <div className="flex-1 max-w-xs">
             <Select options={[{ value: '', label: 'Todos os funcionários' }, ...employees.map(e => ({ value: e.id, label: e.name }))]} value={selectedEmployee} onChange={(e) => setSelectedEmployee(e.target.value)} />
@@ -96,7 +117,25 @@ export default function TimeEntriesPage() {
         {loading ? (
           <div className="flex items-center justify-center py-16"><div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent"></div></div>
         ) : entries.length === 0 ? (
-          <div className="text-center py-16"><Clock className="w-12 h-12 text-gray-700 mx-auto mb-3" /><h3 className="text-sm font-bold text-gray-400">Sem registos</h3><p className="text-xs text-gray-600 mt-1 font-mono">Nenhum registo nesta semana</p><div className="mt-4"><Button onClick={() => openModal()} icon={<Plus className="w-4 h-4" />}>Novo Registo</Button></div></div>
+          <div className="text-center py-16">
+            <Clock className="w-12 h-12 text-gray-700 mx-auto mb-3" />
+            <h3 className="text-sm font-bold text-gray-400">Sem registos</h3>
+            <p className="text-xs text-gray-600 mt-1 font-mono">
+              {employees.length === 0
+                ? 'Não existem funcionários. Cria um funcionário primeiro.'
+                : showAllWeeks
+                  ? 'Não existem registos na base de dados'
+                  : 'Nenhum registo nesta semana'}
+            </p>
+            <div className="mt-4 flex items-center justify-center gap-3 flex-wrap">
+              {employees.length === 0 ? (
+                <Button onClick={() => router.push('/employees')} icon={<Plus className="w-4 h-4" />}>Criar Funcionário</Button>
+              ) : (
+                <Button onClick={() => openModal()} icon={<Plus className="w-4 h-4" />}>Novo Registo</Button>
+              )}
+              {!showAllWeeks && employees.length > 0 && <Button variant="secondary" onClick={() => setShowAllWeeks(true)}>Ver Todos os Registos</Button>}
+            </div>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -120,6 +159,25 @@ export default function TimeEntriesPage() {
                       }
                     } catch { /* ignore */ }
                   }
+                  let breakList: string[] = [];
+                  if (entry.breakTimes) {
+                    try {
+                      const rawBreaks = JSON.parse(entry.breakTimes);
+                      if (Array.isArray(rawBreaks)) {
+                        breakList = rawBreaks;
+                      }
+                    } catch { /* ignore */ }
+                  }
+                  if (breakList.length === 0) {
+                    const meta = decodeTimeTrackMeta(entry.notes);
+                    if (meta?.breakTimes?.length) {
+                      breakList = meta.breakTimes;
+                    }
+                  }
+                  if (breakList.length === 0) {
+                    breakList = [entry.breakStart, entry.breakEnd].filter(Boolean) as string[];
+                  }
+
                   const errorCount = parsedAlerts.filter(a => a.level === 'error').length;
                   const warnCount = parsedAlerts.filter(a => a.level !== 'error').length;
                   const hasErrors = errorCount > 0;
@@ -152,20 +210,16 @@ export default function TimeEntriesPage() {
                         )}
                       </td>
                       <td className="py-3 px-4 text-xs font-mono text-gray-500">
-                        {(() => {
-                          // Se tem breaksData, mostra sequência completa
-                          if (entry.breaksData) {
-                            try {
-                              const breaks: string[] = JSON.parse(entry.breaksData);
-                              const pairs: string[] = [];
-                              for (let i = 0; i < breaks.length - 1; i += 2) {
-                                pairs.push(`${breaks[i]}-${breaks[i+1]}`);
+                        {breakList.length >= 2
+                          ? breakList.reduce<string[]>((acc, time, index) => {
+                              if (index % 2 === 0 && breakList[index + 1]) {
+                                acc.push(`${time} - ${breakList[index + 1]}`);
                               }
-                              return pairs.join(' | ');
-                            } catch {}
-                          }
-                          return entry.breakStart && entry.breakEnd ? `${entry.breakStart} - ${entry.breakEnd}` : '-';
-                        })()}
+                              return acc;
+                            }, []).join(' | ')
+                          : breakList.length === 1
+                            ? breakList[0]
+                            : '-'}
                       </td>
                       <td className="py-3 px-4"><span className={`text-sm font-extrabold font-mono ${hasErrors ? 'text-red-400' : isClean ? 'text-green-400' : 'text-amber-400'}`}>{entry.totalMinutes ? formatMinutesToHours(entry.totalMinutes) : '—'}</span></td>
                       <td className="py-3 px-4">

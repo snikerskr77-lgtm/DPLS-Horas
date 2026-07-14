@@ -22,7 +22,7 @@ export interface ParsedTimeEntry {
   totalFormatted?: string;
   alerts: ParsedAlert[];
   rawAlerts: string[];  // lista simples para compatibilidade
-  agentName?: string;
+  agentName?: string;   // ex: "Pedro Barbaku"
 }
 
 // Verifica se os minutos terminam em 0 ou 5
@@ -60,30 +60,37 @@ export function extractAgentName(threadTitle: string): string {
   return name || threadTitle;
 }
 
+// Extrai nome do agente do conteúdo da mensagem
+function extractAgentNameFromContent(text: string): string | undefined {
+  const match = text.match(/Nome\s+do\s+Agente\s*:\s*(.+)/i);
+  if (!match) return undefined;
+
+  const raw = match[1].trim();
+  // Ex.: "@146 | Pedro Barbaku" -> "Pedro Barbaku"
+  if (raw.includes('|')) {
+    const parts = raw.split('|');
+    const last = parts[parts.length - 1]?.trim();
+    return last || raw;
+  }
+  return raw;
+}
+
 // Parser principal para mensagens de picagem
 export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   // Remove emojis comuns mas mantém o texto
-  let cleanText = content
+  const cleanText = content
     .replace(/🕐|📆|🖊️|•|📝/g, '')
     .trim();
 
-  // ===== NORMALIZAÇÃO: converte formatos alternativos =====
-  // 1. "14h40" → "14:40"  (h minúsculo entre números)
-  cleanText = cleanText.replace(/(\d{1,2})[hH](\d{2})/g, '$1:$2');
-  // 2. "Hora entrada" → "Hora De Entrada"
-  cleanText = cleanText.replace(/(?:hora\s*)?entrada\s*[:]?\s*/gi, 'Hora De Entrada: ');
-  // 3. "Hora saída" → "Hora De Saída"
-  cleanText = cleanText.replace(/(?:hora\s*)?(saída|saida)\s*[:]?\s*/gi, 'Hora De Saída: ');
-  // 4. "Nome do Agente" removido para evitar confundir o parser
-  cleanText = cleanText.replace(/nome do agente\s*[:]?\s*@?\d*\s*[|].*/gi, '');
-  // 5. Limpeza de espaços duplos
-  cleanText = cleanText.replace(/\n{3,}/g, '\n\n').trim();
+  // Normaliza horas escritas como 14h40 / 14H40 -> 14:40
+  const normalizedText = cleanText.replace(/\b(\d{1,2})\s*[hH]\s*(\d{2})\b/g, '$1:$2');
 
   const alerts: ParsedAlert[] = [];
+  const agentName = extractAgentNameFromContent(normalizedText);
 
   // ========== 1. EXTRAI DATA ==========
   const dateRegex = /Data\s*[:]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})/i;
-  const dateMatch = cleanText.match(dateRegex);
+  const dateMatch = normalizedText.match(dateRegex);
   
   if (!dateMatch) {
     alerts.push({
@@ -133,8 +140,8 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   const displayDate = `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`;
 
   // ========== 2. EXTRAI HORA DE ENTRADA ==========
-  const entryRegex = /(?:Hora\s*De\s*Entrada|Entrada)\s*[:]?\s*(\d{1,2}:\d{2})?/i;
-  const entryMatch = cleanText.match(entryRegex);
+  const entryRegex = /(?:Hora\s*(?:De\s*)?Entrada|Entrada)\s*[:]?\s*(\d{1,2}:\d{2})?/i;
+  const entryMatch = normalizedText.match(entryRegex);
   
   let entryTime: string | undefined;
   
@@ -173,8 +180,8 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   }
 
   // ========== 3. EXTRAI HORA DE SAÍDA ==========
-  const exitRegex = /(?:Hora\s*De\s*Saída|Saída)\s*[:]?\s*(\d{1,2}:\d{2}|xx:xx)?/i;
-  const exitMatch = cleanText.match(exitRegex);
+  const exitRegex = /(?:Hora\s*(?:De\s*)?Sa[íi]da|Sa[íi]da)\s*[:]?\s*(\d{1,2}:\d{2}|xx:xx)?/i;
+  const exitMatch = normalizedText.match(exitRegex);
   
   let exitTime: string | undefined;
   
@@ -222,18 +229,20 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   // ========== 4. EXTRAI PAUSAS ==========
   // Regras:
   // - Pausa é opcional — sem pausa = verde/OK
-  // - Aceita qualquer sequência de horários na linha da pausa
-  //   Ex.: "13:50/16:00-17:00/21:00"
-  //   vira [13:50, 16:00, 17:00, 21:00]
-  // - A ordem dos horários é preservada para o cálculo
+  // - Pode haver múltiplas linhas "Pausa:" (ex.: Pausa: 20:10 : 22:10 \n Pausa: 22:30 : 00:20)
+  // - Aceita separadores: - / : espaço
   // - Horário que não termina em 0 ou 5 = erro vermelho, NÃO entra no cálculo
-  const breakTimes: string[] = []; // só horários válidos (terminam em 0/5)
+  const breakTimes: string[] = [];
 
-  const pauseLineRegex = /Pausa\s*[:]?\s*([^\n\r]+)/i;
-  const pauseLineMatch = cleanText.match(pauseLineRegex);
+  // Apanha TODAS as linhas de pausa (flag g + m)
+  // O \s* no início aceita espaços/tabs que sobram de emojis removidos
+  const pauseLineRegex = /^\s*Pausa[ \t]*:?[ \t]*([^\n\r]*)$/gim;
+  const pauseMatches = [...normalizedText.matchAll(pauseLineRegex)];
 
-  if (pauseLineMatch) {
-    const pauseContent = pauseLineMatch[1].trim();
+  for (const pauseMatch of pauseMatches) {
+    const pauseContent = pauseMatch[1].trim();
+    if (!pauseContent) continue; // linha "Pausa" vazia — ignorar
+
     const allTimesRegex = /(\d{1,2}:\d{2})/g;
     let timeMatch;
 
@@ -359,5 +368,6 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
     totalFormatted,
     alerts,
     rawAlerts: alerts.map(a => a.message),
+    agentName,
   };
 }

@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Users, Clock, Calendar, TrendingUp, Trash2, AlertTriangle } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Users, Clock, Calendar, TrendingUp, Trash2, AlertTriangle, Plus, Database } from 'lucide-react';
 import StatsCard from '@/components/StatsCard';
 import Button from '@/components/Button';
 import { formatMinutesToHours } from '@/lib/utils';
@@ -15,6 +16,8 @@ interface DashboardData {
     percentChange: number;
     todayEntries: number;
     totalEntries: number;
+    allTimeEntries: number;
+    allTimeMinutes: number;
   };
   todayActivity: Array<{
     employeeId: string;
@@ -38,12 +41,15 @@ interface DashboardData {
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [seeding, setSeeding] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [clearResult, setClearResult] = useState<{ success: boolean; message: string; stats?: { registosEliminados: number; faltasEliminadas: number; funcionariosEliminados: number } } | null>(null);
   const [confirmText, setConfirmText] = useState('');
+  const canClear = confirmText.trim().toUpperCase() === 'ELIMINAR';
 
   useEffect(() => {
     fetchDashboard();
@@ -91,6 +97,55 @@ export default function DashboardPage() {
           </Button>
         </div>
       </div>
+
+      {data && data.stats.totalEntries === 0 && data.stats.allTimeEntries > 0 && (
+        <div className="glass-card rounded-xl p-4 border-amber-500/20 neon-amber">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-400 mt-0.5" />
+            <div>
+              <p className="text-xs font-bold text-amber-400 uppercase tracking-widest">Existem registos fora desta semana</p>
+              <p className="text-xs text-gray-400 font-mono mt-1">
+                A sincronização pode ter funcionado. Tens <strong>{data.stats.allTimeEntries}</strong> registos na base ({data.stats.allTimeMinutes ? formatMinutesToHours(data.stats.allTimeMinutes) : '0h00m'} no total), mas nenhum na semana atual.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {data && data.stats.totalEmployees === 0 && data.stats.allTimeEntries === 0 && (
+        <div className="glass-card rounded-xl p-5 border-blue-500/20 neon-blue">
+          <div className="flex items-start gap-4">
+            <Database className="w-6 h-6 text-blue-400 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-bold text-blue-400 uppercase tracking-widest">Base vazia</p>
+              <p className="text-xs text-gray-400 font-mono mt-1">
+                Limpaste todos os dados. Agora podes criar funcionários manualmente ou repor dados de exemplo para voltar a testar o sistema.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-3">
+                <Button variant="primary" size="sm" icon={<Plus className="w-4 h-4" />} onClick={() => router.push('/employees')}>
+                  Criar Funcionário
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={seeding}
+                  onClick={async () => {
+                    setSeeding(true);
+                    try {
+                      await fetch('/api/seed', { method: 'POST' });
+                      await fetchDashboard();
+                    } finally {
+                      setSeeding(false);
+                    }
+                  }}
+                >
+                  Repor Dados de Exemplo
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -321,10 +376,13 @@ export default function DashboardPage() {
                     <input
                       type="text"
                       value={confirmText}
-                      onChange={(e) => setConfirmText(e.target.value)}
+                      onChange={(e) => setConfirmText(e.target.value.toUpperCase())}
                       placeholder="ELIMINAR"
-                      className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm font-mono focus:outline-none focus:border-red-500/50 placeholder:text-gray-700"
+                      className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white text-sm font-mono uppercase focus:outline-none focus:border-red-500/50 placeholder:text-gray-700"
                     />
+                    <p className="mt-1 text-[10px] text-gray-600 font-mono">
+                      Podes escrever em minúsculas ou maiúsculas.
+                    </p>
                   </div>
 
                   <div className="flex justify-end gap-3 pt-2">
@@ -332,19 +390,19 @@ export default function DashboardPage() {
                     <Button
                       variant="danger"
                       loading={clearing}
-                      disabled={confirmText !== 'ELIMINAR'}
+                      disabled={!canClear}
                       icon={<Trash2 className="w-4 h-4" />}
                       onClick={async () => {
                         setClearing(true);
                         try {
-                          const res = await fetch('/api/clear-all', { method: 'POST' });
+                          const res = await fetch('/api/clear-all', { method: 'DELETE' });
                           const d = await res.json();
                           setClearResult(d);
-                          if (!d.success) {
-                            setClearResult({ success: false, message: d.error || 'Erro ao limpar dados' });
+                          if (d.success) {
+                            await fetchDashboard();
                           }
                         } catch {
-                          setClearResult({ success: false, message: 'Erro de conexão — verifique se o servidor está online' });
+                          setClearResult({ success: false, message: 'Erro de conexão' });
                         } finally {
                           setClearing(false);
                         }

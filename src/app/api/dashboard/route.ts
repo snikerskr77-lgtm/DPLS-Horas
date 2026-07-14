@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/db';
-import { sql } from 'drizzle-orm';
+import { timeEntries, employees, absences } from '@/db/schema';
+import { eq, and, gte, lte, count, sum, sql } from 'drizzle-orm';
 import { startOfWeek, endOfWeek, format, subWeeks, eachDayOfInterval } from 'date-fns';
 import { formatMinutesToHours, nowInPortugal } from '@/lib/utils';
 
@@ -16,117 +17,117 @@ export async function GET() {
     const endStr = format(weekEnd, 'yyyy-MM-dd');
     const lastStartStr = format(lastWeekStart, 'yyyy-MM-dd');
     const lastEndStr = format(lastWeekEnd, 'yyyy-MM-dd');
+
+    // Get total employees
+    const [employeeCount] = await db
+      .select({ count: count() })
+      .from(employees)
+      .where(eq(employees.isActive, true));
+
+    // Get this week's entries
+    const thisWeekEntries = await db
+      .select({
+        totalMinutes: sum(timeEntries.totalMinutes),
+        entryCount: count(),
+      })
+      .from(timeEntries)
+      .where(and(gte(timeEntries.date, startStr), lte(timeEntries.date, endStr)));
+
+    // Get all-time entries
+    const allTimeEntries = await db
+      .select({
+        totalMinutes: sum(timeEntries.totalMinutes),
+        entryCount: count(),
+      })
+      .from(timeEntries);
+
+    // Get last week's entries
+    const lastWeekEntries = await db
+      .select({
+        totalMinutes: sum(timeEntries.totalMinutes),
+        entryCount: count(),
+      })
+      .from(timeEntries)
+      .where(and(gte(timeEntries.date, lastStartStr), lte(timeEntries.date, lastEndStr)));
+
+    // Get today's entries
     const todayStr = format(today, 'yyyy-MM-dd');
+    const todayEntries = await db
+      .select({
+        employeeId: timeEntries.employeeId,
+        employeeName: employees.name,
+        entryTime: timeEntries.entryTime,
+        exitTime: timeEntries.exitTime,
+        totalMinutes: timeEntries.totalMinutes,
+      })
+      .from(timeEntries)
+      .leftJoin(employees, eq(timeEntries.employeeId, employees.id))
+      .where(eq(timeEntries.date, todayStr));
 
-    // Total de funcionários ativos
-    const empCount = await db.execute(sql`
-      SELECT COUNT(*)::int as count FROM employees WHERE is_active = true
-    `);
-    const totalEmployees = empCount.rows[0]?.count || 0;
-
-    // Total de minutos esta semana
-    const thisWeek = await db.execute(sql`
-      SELECT COALESCE(SUM(total_minutes), 0)::int as total, COUNT(*)::int as count
-      FROM time_entries WHERE date >= ${startStr}::date AND date <= ${endStr}::date
-    `);
-    const thisWeekMinutes = Number(thisWeek.rows[0]?.total || 0);
-    const totalEntries = Number(thisWeek.rows[0]?.count || 0);
-
-    // Total de minutos semana passada
-    const lastWeek = await db.execute(sql`
-      SELECT COALESCE(SUM(total_minutes), 0)::int as total
-      FROM time_entries WHERE date >= ${lastStartStr}::date AND date <= ${lastEndStr}::date
-    `);
-    const lastWeekMinutes = Number(lastWeek.rows[0]?.total || 0);
-    const percentChange = lastWeekMinutes > 0
-      ? Math.round(((thisWeekMinutes - lastWeekMinutes) / lastWeekMinutes) * 100)
-      : 0;
-
-    // Registo de hoje
-    const todayData = await db.execute(sql`
-      SELECT te.employee_id, e.name as employee_name,
-             te.entry_time, te.exit_time, te.total_minutes
-      FROM time_entries te
-      LEFT JOIN employees e ON te.employee_id = e.id
-      WHERE te.date = ${todayStr}::date
-      ORDER BY e.name
-    `);
-    const todayEntries = todayData.rows.length;
-    const todayActivity = todayData.rows.map((r: any) => ({
-      employeeId: r.employee_id,
-      employeeName: r.employee_name,
-      entryTime: r.entry_time,
-      exitTime: r.exit_time,
-      totalMinutes: r.total_minutes,
-      totalFormatted: formatMinutesToHours(r.total_minutes || 0),
-    }));
-
-    // Horas por dia para gráfico
+    // Calculate weekly hours by day for chart
     const weekDays = eachDayOfInterval({ start: weekStart, end: weekEnd });
     const chartData = [];
 
     for (const day of weekDays) {
       const dayStr = format(day, 'yyyy-MM-dd');
-      const dayResult = await db.execute(sql`
-        SELECT COALESCE(SUM(total_minutes), 0)::int as total
-        FROM time_entries WHERE date = ${dayStr}::date
-      `);
-      const totalMins = Number(dayResult.rows[0]?.total || 0);
+      const [dayTotal] = await db
+        .select({ totalMinutes: sum(timeEntries.totalMinutes) })
+        .from(timeEntries)
+        .where(eq(timeEntries.date, dayStr));
+
       chartData.push({
         day: format(day, 'EEE'),
         date: format(day, 'dd/MM'),
-        hours: Math.round((totalMins / 60) * 10) / 10,
+        hours: Math.round(Number(dayTotal?.totalMinutes || 0) / 60 * 10) / 10,
       });
     }
 
-    // Top 5 funcionários com mais horas esta semana
-    const topData = await db.execute(sql`
-      SELECT e.name, COALESCE(SUM(te.total_minutes), 0)::int as total
-      FROM time_entries te
-      LEFT JOIN employees e ON te.employee_id = e.id
-      WHERE te.date >= ${startStr}::date AND te.date <= ${endStr}::date
-      GROUP BY e.name
-      ORDER BY total DESC
-      LIMIT 5
-    `);
-    const topEmployees = topData.rows.map((r: any) => ({
-      name: r.name,
-      hours: formatMinutesToHours(r.total || 0),
-      minutes: Number(r.total || 0),
-    }));
+    // Get employees with most hours this week
+    const topEmployees = await db
+      .select({
+        employeeId: timeEntries.employeeId,
+        employeeName: employees.name,
+        totalMinutes: sum(timeEntries.totalMinutes),
+      })
+      .from(timeEntries)
+      .leftJoin(employees, eq(timeEntries.employeeId, employees.id))
+      .where(and(gte(timeEntries.date, startStr), lte(timeEntries.date, endStr)))
+      .groupBy(timeEntries.employeeId, employees.name)
+      .orderBy(sql`sum(${timeEntries.totalMinutes}) DESC`)
+      .limit(5);
+
+    const thisWeekMinutes = Number(thisWeekEntries[0]?.totalMinutes || 0);
+    const lastWeekMinutes = Number(lastWeekEntries[0]?.totalMinutes || 0);
+    const percentChange = lastWeekMinutes > 0
+      ? Math.round(((thisWeekMinutes - lastWeekMinutes) / lastWeekMinutes) * 100)
+      : 0;
 
     return NextResponse.json({
       stats: {
-        totalEmployees,
+        totalEmployees: employeeCount?.count || 0,
         thisWeekHours: formatMinutesToHours(thisWeekMinutes),
         thisWeekMinutes,
         lastWeekMinutes,
         percentChange,
-        todayEntries,
-        totalEntries,
+        todayEntries: todayEntries.length,
+        totalEntries: Number(thisWeekEntries[0]?.entryCount || 0),
+        allTimeEntries: Number(allTimeEntries[0]?.entryCount || 0),
+        allTimeMinutes: Number(allTimeEntries[0]?.totalMinutes || 0),
       },
-      todayActivity,
+      todayActivity: todayEntries.map(e => ({
+        ...e,
+        totalFormatted: formatMinutesToHours(e.totalMinutes || 0),
+      })),
       chartData,
-      topEmployees,
+      topEmployees: topEmployees.map(e => ({
+        name: e.employeeName,
+        hours: formatMinutesToHours(Number(e.totalMinutes || 0)),
+        minutes: Number(e.totalMinutes || 0),
+      })),
       weekRange: `${format(weekStart, 'dd/MM')} - ${format(weekEnd, 'dd/MM/yyyy')}`,
     });
   } catch (error) {
-    console.error('Erro no dashboard:', error);
-    return NextResponse.json({
-      error: 'Erro ao carregar dashboard',
-      stats: {
-        totalEmployees: 0,
-        thisWeekHours: '0h00m',
-        thisWeekMinutes: 0,
-        lastWeekMinutes: 0,
-        percentChange: 0,
-        todayEntries: 0,
-        totalEntries: 0,
-      },
-      todayActivity: [],
-      chartData: [],
-      topEmployees: [],
-      weekRange: '',
-    });
+    console.error('Error fetching dashboard data:', error);
+    return NextResponse.json({ error: 'Erro ao carregar dashboard' }, { status: 500 });
   }
 }
