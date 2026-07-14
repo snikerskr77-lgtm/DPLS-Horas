@@ -63,9 +63,21 @@ export function extractAgentName(threadTitle: string): string {
 // Parser principal para mensagens de picagem
 export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   // Remove emojis comuns mas mantém o texto
-  const cleanText = content
+  let cleanText = content
     .replace(/🕐|📆|🖊️|•|📝/g, '')
     .trim();
+
+  // ===== NORMALIZAÇÃO: converte formatos alternativos =====
+  // 1. "14h40" → "14:40"  (h minúsculo entre números)
+  cleanText = cleanText.replace(/(\d{1,2})[hH](\d{2})/g, '$1:$2');
+  // 2. "Hora entrada" → "Hora De Entrada"
+  cleanText = cleanText.replace(/(?:hora\s*)?entrada\s*[:]?\s*/gi, 'Hora De Entrada: ');
+  // 3. "Hora saída" → "Hora De Saída"
+  cleanText = cleanText.replace(/(?:hora\s*)?(saída|saida)\s*[:]?\s*/gi, 'Hora De Saída: ');
+  // 4. "Nome do Agente" removido para evitar confundir o parser
+  cleanText = cleanText.replace(/nome do agente\s*[:]?\s*@?\d*\s*[|].*/gi, '');
+  // 5. Limpeza de espaços duplos
+  cleanText = cleanText.replace(/\n{3,}/g, '\n\n').trim();
 
   const alerts: ParsedAlert[] = [];
 
