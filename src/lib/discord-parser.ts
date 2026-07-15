@@ -164,69 +164,19 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   }
 
   for (const content of pauseContents) {
-    // Divide por | para múltiplos pares na mesma linha
-    const segments = content.split('|');
+    // Estratégia simples e robusta: extrair TODAS as horas HH:MM do conteúdo
+    // Funciona com qualquer separador: - / | espaço , etc.
+    // Ex: "03:05 - 16:35 21:45 - 22:55" → [03:05, 16:35, 21:45, 22:55]
+    // Ex: "17:00 / 21:25"               → [17:00, 21:25]
+    // Ex: "12:30 - 13:50 | 19:30 - 21:00" → [12:30, 13:50, 19:30, 21:00]
+    const allTimes = content.match(/\d{1,2}:\d{2}/g) || [];
 
-    for (const segment of segments) {
-      const trimmed = segment.trim();
-      if (!trimmed) continue;
-
-      // Tenta par: 12:30 - 13:50 (separadores: - – — :)
-      const pairMatch = trimmed.match(/(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})/);
-      if (pairMatch) {
-        const start = pairMatch[1].trim();
-        const end = pairMatch[2].trim();
-
-        if (isValidTime(start)) {
-          if (!validateTimeMinutes(start)) {
-            alerts.push({ level: 'error', code: 'BREAK_NOT_ROUND', message: `Início pausa ${start} não termina em 0 ou 5.`, field: 'pausa' });
-          } else {
-            breakTimes.push(start);
-          }
-        }
-        if (isValidTime(end)) {
-          if (!validateTimeMinutes(end)) {
-            alerts.push({ level: 'error', code: 'BREAK_NOT_ROUND', message: `Fim pausa ${end} não termina em 0 ou 5.`, field: 'pausa' });
-          } else {
-            breakTimes.push(end);
-          }
-        }
-        continue;
-      }
-
-      // Tenta dois tempos separados por espaço/: : 12:30 13:50
-      const twoTimesMatch = trimmed.match(/(\d{1,2}:\d{2})\s*[:\s]\s*(\d{1,2}:\d{2})/);
-      if (twoTimesMatch) {
-        const start = twoTimesMatch[1].trim();
-        const end = twoTimesMatch[2].trim();
-        if (isValidTime(start)) {
-          if (!validateTimeMinutes(start)) {
-            alerts.push({ level: 'error', code: 'BREAK_NOT_ROUND', message: `Início pausa ${start} não termina em 0 ou 5.`, field: 'pausa' });
-          } else {
-            breakTimes.push(start);
-          }
-        }
-        if (isValidTime(end)) {
-          if (!validateTimeMinutes(end)) {
-            alerts.push({ level: 'error', code: 'BREAK_NOT_ROUND', message: `Fim pausa ${end} não termina em 0 ou 5.`, field: 'pausa' });
-          } else {
-            breakTimes.push(end);
-          }
-        }
-        continue;
-      }
-
-      // Tenta tempo único: 09:42
-      const singleMatch = trimmed.match(/(\d{1,2}:\d{2})/);
-      if (singleMatch) {
-        const t = singleMatch[1].trim();
-        if (isValidTime(t)) {
-          if (!validateTimeMinutes(t)) {
-            alerts.push({ level: 'error', code: 'BREAK_NOT_ROUND', message: `Pausa ${t} não termina em 0 ou 5.`, field: 'pausa' });
-          } else {
-            breakTimes.push(t);
-          }
-        }
+    for (const t of allTimes) {
+      if (!isValidTime(t)) continue;
+      if (!validateTimeMinutes(t)) {
+        alerts.push({ level: 'error', code: 'BREAK_NOT_ROUND', message: `Pausa ${t} não termina em 0 ou 5.`, field: 'pausa' });
+      } else {
+        breakTimes.push(t);
       }
     }
   }
