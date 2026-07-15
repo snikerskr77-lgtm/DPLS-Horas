@@ -5,13 +5,10 @@ import { count } from 'drizzle-orm';
 
 export async function DELETE() {
   try {
-    // Conta primeiro, depois apaga sem returning()
-    // Isto evita erros se a base remota estiver com schema ligeiramente diferente.
     const [entriesCount] = await db.select({ value: count() }).from(timeEntries);
     const [absencesCount] = await db.select({ value: count() }).from(absences);
     const [employeesCount] = await db.select({ value: count() }).from(employees);
 
-    // Elimina por ordem por causa das foreign keys
     await db.delete(timeEntries);
     await db.delete(absences);
     await db.delete(employees);

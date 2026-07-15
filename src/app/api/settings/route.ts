@@ -3,15 +3,11 @@ import { db } from '@/db';
 import { settings } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 
-// GET - buscar todas as configurações
 export async function GET() {
   try {
     const allSettings = await db.select().from(settings);
-    
-    // Converte para objeto
     const settingsObj: Record<string, string> = {};
     for (const s of allSettings) {
-      // Oculta parcialmente o token por segurança
       if (s.key === 'discord_bot_token' && s.value) {
         settingsObj[s.key] = s.value.substring(0, 20) + '...' + s.value.substring(s.value.length - 10);
         settingsObj['discord_bot_token_configured'] = 'true';
@@ -19,7 +15,6 @@ export async function GET() {
         settingsObj[s.key] = s.value;
       }
     }
-    
     return NextResponse.json(settingsObj);
   } catch (error) {
     console.error('Error fetching settings:', error);
@@ -27,19 +22,14 @@ export async function GET() {
   }
 }
 
-// POST - guardar configurações
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { key, value } = body;
-
     if (!key) {
       return NextResponse.json({ error: 'Chave é obrigatória' }, { status: 400 });
     }
-
-    // Upsert - insere ou atualiza
     const existing = await db.select().from(settings).where(eq(settings.key, key));
-    
     if (existing.length > 0) {
       await db
         .update(settings)
@@ -48,7 +38,6 @@ export async function POST(request: NextRequest) {
     } else {
       await db.insert(settings).values({ key, value: value || '' });
     }
-
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error saving setting:', error);
@@ -56,14 +45,11 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// PUT - guardar múltiplas configurações de uma vez
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
-    
     for (const [key, value] of Object.entries(body)) {
       const existing = await db.select().from(settings).where(eq(settings.key, key));
-      
       if (existing.length > 0) {
         await db
           .update(settings)
@@ -73,7 +59,6 @@ export async function PUT(request: NextRequest) {
         await db.insert(settings).values({ key, value: String(value || '') });
       }
     }
-
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error saving settings:', error);

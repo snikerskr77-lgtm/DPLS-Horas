@@ -13,7 +13,7 @@ export async function getDiscordConfig(): Promise<DiscordConfig> {
       .select()
       .from(settings)
       .where(eq(settings.key, 'discord_bot_token'));
-    
+
     const channelSetting = await db
       .select()
       .from(settings)
@@ -23,8 +23,7 @@ export async function getDiscordConfig(): Promise<DiscordConfig> {
       token: tokenSetting[0]?.value || process.env.DISCORD_BOT_TOKEN || null,
       channelId: channelSetting[0]?.value || process.env.DISCORD_CHANNEL_ID || null,
     };
-  } catch (error) {
-    // Se a tabela não existir ainda, usa env vars
+  } catch {
     return {
       token: process.env.DISCORD_BOT_TOKEN || null,
       channelId: process.env.DISCORD_CHANNEL_ID || null,

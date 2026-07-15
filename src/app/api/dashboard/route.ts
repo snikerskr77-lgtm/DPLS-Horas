@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/db';
-import { timeEntries, employees, absences } from '@/db/schema';
+import { timeEntries, employees } from '@/db/schema';
 import { eq, and, gte, lte, count, sum, sql } from 'drizzle-orm';
 import { startOfWeek, endOfWeek, format, subWeeks, eachDayOfInterval } from 'date-fns';
 import { formatMinutesToHours, nowInPortugal } from '@/lib/utils';
@@ -18,13 +18,11 @@ export async function GET() {
     const lastStartStr = format(lastWeekStart, 'yyyy-MM-dd');
     const lastEndStr = format(lastWeekEnd, 'yyyy-MM-dd');
 
-    // Get total employees
     const [employeeCount] = await db
       .select({ count: count() })
       .from(employees)
       .where(eq(employees.isActive, true));
 
-    // Get this week's entries
     const thisWeekEntries = await db
       .select({
         totalMinutes: sum(timeEntries.totalMinutes),
@@ -33,7 +31,6 @@ export async function GET() {
       .from(timeEntries)
       .where(and(gte(timeEntries.date, startStr), lte(timeEntries.date, endStr)));
 
-    // Get all-time entries
     const allTimeEntries = await db
       .select({
         totalMinutes: sum(timeEntries.totalMinutes),
@@ -41,7 +38,6 @@ export async function GET() {
       })
       .from(timeEntries);
 
-    // Get last week's entries
     const lastWeekEntries = await db
       .select({
         totalMinutes: sum(timeEntries.totalMinutes),
@@ -50,7 +46,6 @@ export async function GET() {
       .from(timeEntries)
       .where(and(gte(timeEntries.date, lastStartStr), lte(timeEntries.date, lastEndStr)));
 
-    // Get today's entries
     const todayStr = format(today, 'yyyy-MM-dd');
     const todayEntries = await db
       .select({
@@ -64,7 +59,6 @@ export async function GET() {
       .leftJoin(employees, eq(timeEntries.employeeId, employees.id))
       .where(eq(timeEntries.date, todayStr));
 
-    // Calculate weekly hours by day for chart
     const weekDays = eachDayOfInterval({ start: weekStart, end: weekEnd });
     const chartData = [];
 
@@ -82,7 +76,6 @@ export async function GET() {
       });
     }
 
-    // Get employees with most hours this week
     const topEmployees = await db
       .select({
         employeeId: timeEntries.employeeId,

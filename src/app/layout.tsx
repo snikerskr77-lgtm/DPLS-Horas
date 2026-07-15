@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import "./globals.css";
 import Sidebar from "@/components/Sidebar";
 
@@ -7,15 +8,11 @@ export const metadata: Metadata = {
   description: "Sistema profissional de gestão de ponto e horas de trabalho",
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="pt">
       <body className="min-h-screen bg-gradient-to-br from-blue-950/95 via-slate-900/98 to-neutral-950 text-white font-sans">
-        {/* Grid background */}
+        {/* Background grid */}
         <div className="fixed inset-0 bg-grid pointer-events-none opacity-40 z-0" />
 
         {/* Top accent bar */}

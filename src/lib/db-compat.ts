@@ -13,6 +13,6 @@ export function isMissingBreakTimesColumnError(error: unknown): boolean {
   return (
     message.includes('break_times') ||
     message.includes('breaks_data') ||
-    message.includes('column') && message.includes('does not exist') && message.includes('break')
+    (message.includes('column') && message.includes('does not exist') && message.includes('break'))
   );
 }

@@ -32,7 +32,7 @@ export const timeEntries = pgTable("time_entries", {
   exitTime: varchar("exit_time", { length: 5 }), // HH:MM format, nullable for ongoing
   breakStart: varchar("break_start", { length: 5 }), // legacy single break start
   breakEnd: varchar("break_end", { length: 5 }), // legacy single break end
-  breakTimes: text("break_times"), // JSON array of all break times: ["13:50","16:00","17:00","21:00"]
+  breakTimes: text("break_times"), // JSON array of all break times
   totalMinutes: integer("total_minutes").default(0),
   notes: text("notes"),
   alerts: text("alerts"), // JSON array of alert strings
@@ -47,7 +47,7 @@ export const absences = pgTable("absences", {
     .references(() => employees.id, { onDelete: "cascade" })
     .notNull(),
   date: date("date").notNull(),
-  type: varchar("type", { length: 50 }).notNull(), // 'unjustified', 'justified', 'vacation', 'sick'
+  type: varchar("type", { length: 50 }).notNull(),
   reason: text("reason"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

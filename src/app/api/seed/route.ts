@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/db';
 import { employees, timeEntries } from '@/db/schema';
-import { format, subDays, startOfWeek } from 'date-fns';
+import { format, startOfWeek } from 'date-fns';
 import { nowInPortugal } from '@/lib/utils';
 
 const sampleEmployees = [
@@ -14,7 +14,6 @@ const sampleEmployees = [
 
 export async function POST() {
   try {
-    // Create employees
     const createdEmployees = [];
     for (const emp of sampleEmployees) {
       const [created] = await db
@@ -25,15 +24,13 @@ export async function POST() {
       if (created) createdEmployees.push(created);
     }
 
-    // If no new employees were created, fetch existing ones
-    const allEmployees = createdEmployees.length > 0 
-      ? createdEmployees 
+    const allEmployees = createdEmployees.length > 0
+      ? createdEmployees
       : await db.select().from(employees);
 
-    // Create time entries for the current week
     const today = nowInPortugal();
     const weekStart = startOfWeek(today, { weekStartsOn: 0 });
-    
+
     const timeSlots = [
       { entry: '09:00', exit: '18:00', breakStart: '12:30', breakEnd: '13:30' },
       { entry: '08:30', exit: '17:30', breakStart: '12:00', breakEnd: '13:00' },
@@ -45,22 +42,19 @@ export async function POST() {
     let entriesCreated = 0;
 
     for (const employee of allEmployees) {
-      // Create entries for days that have passed this week
       const currentDayOfWeek = today.getDay();
-      
+
       for (let dayOffset = 0; dayOffset <= Math.min(currentDayOfWeek, 5); dayOffset++) {
-        // Skip Sunday (0) and Saturday (6)
         if (dayOffset === 0 || dayOffset === 6) continue;
-        
+
         const entryDate = new Date(weekStart);
         entryDate.setDate(entryDate.getDate() + dayOffset);
-        
-        // Skip future dates
+
         if (entryDate > today) continue;
-        
+
         const slot = timeSlots[Math.floor(Math.random() * timeSlots.length)];
-        const totalMinutes = 8 * 60; // 8 hours
-        
+        const totalMinutes = 8 * 60;
+
         try {
           await db.insert(timeEntries).values({
             employeeId: employee.id,
@@ -72,7 +66,7 @@ export async function POST() {
             totalMinutes,
           }).onConflictDoNothing();
           entriesCreated++;
-        } catch (err) {
+        } catch {
           // Skip duplicates
         }
       }

@@ -1,5 +1,4 @@
-import { format, startOfWeek, endOfWeek, eachDayOfInterval, parseISO, differenceInMinutes, parse, addDays } from 'date-fns';
-import { pt } from 'date-fns/locale';
+import { format, startOfWeek, endOfWeek, eachDayOfInterval, parseISO } from 'date-fns';
 import { TZDate } from '@date-fns/tz';
 
 // Timezone de Portugal continental
@@ -90,9 +89,6 @@ export function buildWorkPeriods(
 }
 
 // Calculate work minutes from entry/exit/break times
-// Usa mesma lógica sequencial do parser Discord
-// Sequência: [entrada, pausaInicio, pausaFim, saída]
-// Períodos de trabalho = pares: [entrada→pausaInicio], [pausaFim→saída]
 export function calculateWorkMinutes(
   entryTime: string,
   exitTime: string | null,
@@ -101,7 +97,6 @@ export function calculateWorkMinutes(
 ): number {
   if (!exitTime) return 0;
 
-  // Constrói sequência
   const sequence: number[] = [];
   sequence.push(timeToMinutes(entryTime));
 
@@ -117,7 +112,6 @@ export function calculateWorkMinutes(
 
   sequence.push(timeToMinutes(exitTime));
 
-  // Ajusta para turnos noturnos
   const adjusted: number[] = [sequence[0]];
   for (let i = 1; i < sequence.length; i++) {
     let val = sequence[i];
@@ -127,7 +121,6 @@ export function calculateWorkMinutes(
     adjusted.push(val);
   }
 
-  // Soma períodos de trabalho (pares)
   let total = 0;
   for (let i = 0; i < adjusted.length - 1; i += 2) {
     if (i + 1 < adjusted.length) {
@@ -146,8 +139,8 @@ export function validateTimeMinutes(time: string): boolean {
 
 // Get week boundaries (Sunday to Saturday)
 export function getWeekBoundaries(date: Date): { start: Date; end: Date } {
-  const start = startOfWeek(date, { weekStartsOn: 0 }); // Sunday
-  const end = endOfWeek(date, { weekStartsOn: 0 }); // Saturday
+  const start = startOfWeek(date, { weekStartsOn: 0 });
+  const end = endOfWeek(date, { weekStartsOn: 0 });
   return { start, end };
 }
 
@@ -167,16 +160,6 @@ export function formatDate(date: Date | string): string {
 export function formatWeekRange(date: Date): string {
   const { start, end } = getWeekBoundaries(date);
   return `${format(start, 'dd/MM')} - ${format(end, 'dd/MM')}`;
-}
-
-// Get ISO week number
-export function getWeekNumber(date: Date): { year: number; week: number } {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const dayNum = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-  return { year: d.getUTCFullYear(), week };
 }
 
 // CN utility for className merging

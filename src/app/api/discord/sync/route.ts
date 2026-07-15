@@ -6,12 +6,7 @@ import { parseTimeEntryMessage, extractAgentName } from '@/lib/discord-parser';
 import { getDiscordConfig } from '@/lib/get-discord-config';
 import { getErrorMessage } from '@/lib/db-compat';
 import { buildWorkPeriods, encodeTimeTrackMeta } from '@/lib/utils';
-import { 
-  getChannel, 
-  getAllChannelMessages, 
-  getArchivedThreads,
-  type DiscordThread
-} from '@/lib/discord-api';
+import { getChannel, getAllChannelMessages, getArchivedThreads, type DiscordThread } from '@/lib/discord-api';
 
 interface SyncStats {
   threadsProcessed: number;
@@ -20,12 +15,6 @@ interface SyncStats {
   entriesUpdated: number;
   employeesCreated: number;
   errors: string[];
-}
-
-interface SyncResult {
-  success: boolean;
-  message: string;
-  stats?: SyncStats;
 }
 
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
@@ -37,51 +26,33 @@ async function discordFetch<T>(endpoint: string, token: string): Promise<T> {
       'Content-Type': 'application/json',
     },
   });
-
   if (!response.ok) {
     const error = await response.text();
     throw new Error(`Discord API error (${response.status}): ${error}`);
   }
-
   return response.json();
 }
 
 async function getActiveThreadsForChannel(token: string, channelId: string): Promise<DiscordThread[]> {
-  // Busca o canal para obter o guild_id
   const channel = await discordFetch<{ guild_id?: string }>(`/channels/${channelId}`, token);
-  
-  if (!channel.guild_id) {
-    return [];
-  }
-
-  // Busca todas as threads ativas do servidor
+  if (!channel.guild_id) return [];
   const data = await discordFetch<{ threads: DiscordThread[] }>(
-    `/guilds/${channel.guild_id}/threads/active`, 
+    `/guilds/${channel.guild_id}/threads/active`,
     token
   );
-
-  // Filtra apenas as threads do canal específico
   return data.threads.filter(t => t.parent_id === channelId);
 }
 
-export async function POST(request: NextRequest): Promise<NextResponse<SyncResult>> {
-  // Busca configurações da base de dados ou env vars
+export async function POST(_request: NextRequest): Promise<NextResponse> {
   const config = await getDiscordConfig();
   const DISCORD_TOKEN = config.token;
   const CHANNEL_ID = config.channelId;
 
   if (!DISCORD_TOKEN) {
-    return NextResponse.json({
-      success: false,
-      message: 'Token do Bot Discord não configurado. Vá às configurações e adicione o token.',
-    }, { status: 400 });
+    return NextResponse.json({ success: false, message: 'Token do Bot Discord não configurado.' }, { status: 400 });
   }
-
   if (!CHANNEL_ID) {
-    return NextResponse.json({
-      success: false,
-      message: 'ID do Canal Discord não configurado. Vá às configurações e adicione o ID do canal.',
-    }, { status: 400 });
+    return NextResponse.json({ success: false, message: 'ID do Canal Discord não configurado.' }, { status: 400 });
   }
 
   const stats: SyncStats = {
@@ -94,15 +65,10 @@ export async function POST(request: NextRequest): Promise<NextResponse<SyncResul
   };
 
   try {
-    // Busca informações do canal
     const channel = await getChannel(DISCORD_TOKEN, CHANNEL_ID);
-    
-    // Tipo 15 = Forum, Tipo 0 = Text
     if (channel.type === 15) {
-      // É um canal de fórum - processa threads
       await processForumChannel(DISCORD_TOKEN, CHANNEL_ID, stats);
     } else {
-      // É um canal de texto normal
       await processTextChannel(DISCORD_TOKEN, CHANNEL_ID, stats);
     }
 
@@ -111,10 +77,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<SyncResul
       message: `Sincronização concluída! ${stats.entriesCreated} novos registos, ${stats.entriesUpdated} atualizados.`,
       stats,
     });
-
   } catch (error) {
     console.error('Erro na sincronização Discord:', error);
-    
     return NextResponse.json({
       success: false,
       message: error instanceof Error ? error.message : 'Erro desconhecido na sincronização',
@@ -125,17 +89,12 @@ export async function POST(request: NextRequest): Promise<NextResponse<SyncResul
 
 async function processForumChannel(token: string, channelId: string, stats: SyncStats) {
   try {
-    // Busca threads ativas
     const activeThreads = await getActiveThreadsForChannel(token, channelId);
-    
     for (const thread of activeThreads) {
       await processThread(token, thread, stats);
     }
-
-    // Busca threads arquivadas
     try {
       const archived = await getArchivedThreads(token, channelId);
-      
       for (const thread of archived.threads) {
         await processThread(token, thread, stats);
       }
@@ -150,10 +109,8 @@ async function processForumChannel(token: string, channelId: string, stats: Sync
 async function processTextChannel(token: string, channelId: string, stats: SyncStats) {
   try {
     const messages = await getAllChannelMessages(token, channelId, 500);
-    
     for (const message of messages) {
-      if (message.author.id === 'bot') continue; // Skip bot messages
-      
+      if (message.author.id === 'bot') continue;
       const agentName = message.author.global_name || message.author.username;
       await processMessage(message.content, agentName, stats);
     }
@@ -165,10 +122,8 @@ async function processTextChannel(token: string, channelId: string, stats: SyncS
 async function processThread(token: string, thread: DiscordThread, stats: SyncStats) {
   const agentName = extractAgentName(thread.name);
   stats.threadsProcessed++;
-
   try {
     const messages = await getAllChannelMessages(token, thread.id, 200);
-    
     for (const message of messages) {
       await processMessage(message.content, agentName, stats);
     }
@@ -179,13 +134,10 @@ async function processThread(token: string, thread: DiscordThread, stats: SyncSt
 
 async function processMessage(content: string, agentName: string, stats: SyncStats) {
   stats.messagesProcessed++;
-
   const parsed = parseTimeEntryMessage(content);
   const resolvedAgentName = parsed.agentName || agentName;
-  
-  if (!parsed.valid || !parsed.date || !parsed.entryTime) {
-    return;
-  }
+
+  if (!parsed.valid || !parsed.date || !parsed.entryTime) return;
 
   const periods = buildWorkPeriods(parsed.entryTime, parsed.exitTime || null, parsed.breakTimes || []);
   const notesMeta = encodeTimeTrackMeta({
@@ -194,39 +146,20 @@ async function processMessage(content: string, agentName: string, stats: SyncSta
     source: 'discord',
   });
 
-  // Serializa alertas com level e code para exibição rica
-  const alertsJson = parsed.alerts.length > 0
-    ? JSON.stringify(parsed.alerts)
-    : null;
+  const alertsJson = parsed.alerts.length > 0 ? JSON.stringify(parsed.alerts) : null;
 
   try {
-    // Busca ou cria o funcionário
-    let [employee] = await db
-      .select()
-      .from(employees)
-      .where(eq(employees.name, resolvedAgentName));
-
+    let [employee] = await db.select().from(employees).where(eq(employees.name, resolvedAgentName));
     if (!employee) {
-      [employee] = await db
-        .insert(employees)
-        .values({ name: resolvedAgentName })
-        .returning();
+      [employee] = await db.insert(employees).values({ name: resolvedAgentName }).returning();
       stats.employeesCreated++;
     }
 
-    // Verifica se já existe entrada para esta data
     const [existingEntry] = await db
       .select({ id: timeEntries.id })
       .from(timeEntries)
-      .where(and(
-        eq(timeEntries.employeeId, employee.id),
-        eq(timeEntries.date, parsed.date)
-      ));
+      .where(and(eq(timeEntries.employeeId, employee.id), eq(timeEntries.date, parsed.date)));
 
-    // IMPORTANTE:
-    // Na sincronização Discord usamos apenas colunas compatíveis com schemas antigos
-    // para garantir que as horas entram mesmo se a base remota ainda não tiver
-    // colunas novas como break_times / breaks_data.
     const baseValues = {
       entryTime: parsed.entryTime,
       exitTime: parsed.exitTime || null,
@@ -239,26 +172,14 @@ async function processMessage(content: string, agentName: string, stats: SyncSta
     };
 
     if (existingEntry) {
-      await db
-        .update(timeEntries)
-        .set(baseValues)
-        .where(eq(timeEntries.id, existingEntry.id));
+      await db.update(timeEntries).set(baseValues).where(eq(timeEntries.id, existingEntry.id));
       stats.entriesUpdated++;
     } else {
-      // Cria nova entrada
-      const insertBaseValues = {
+      await db.insert(timeEntries).values({
         employeeId: employee.id,
         date: parsed.date,
-        entryTime: parsed.entryTime,
-        exitTime: parsed.exitTime || null,
-        breakStart: parsed.breakTimes?.[0] || null,
-        breakEnd: parsed.breakTimes?.[1] || null,
-        totalMinutes: parsed.totalMinutes ?? 0,
-        notes: notesMeta,
-        alerts: alertsJson,
-      };
-
-      await db.insert(timeEntries).values(insertBaseValues);
+        ...baseValues,
+      });
       stats.entriesCreated++;
     }
   } catch (error) {
@@ -266,16 +187,12 @@ async function processMessage(content: string, agentName: string, stats: SyncSta
   }
 }
 
-// GET para verificar status da configuração
 export async function GET() {
   const config = await getDiscordConfig();
-  const hasToken = !!config.token;
-  const hasChannel = !!config.channelId;
-  
   return NextResponse.json({
-    configured: hasToken && hasChannel,
-    hasToken,
-    hasChannel,
+    configured: !!config.token && !!config.channelId,
+    hasToken: !!config.token,
+    hasChannel: !!config.channelId,
     channelId: config.channelId || null,
   });
 }

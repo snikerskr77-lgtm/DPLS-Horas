@@ -1,256 +1,117 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Plus, Clock, AlertTriangle, Edit2, Trash2, ChevronLeft, ChevronRight, XCircle, CheckCircle } from 'lucide-react';
-import Button from '@/components/Button';
-import Modal from '@/components/Modal';
-import Input from '@/components/Input';
-import Select from '@/components/Select';
-import TimeInput from '@/components/TimeInput';
-import DateInput from '@/components/DateInput';
-import { format, startOfWeek, endOfWeek, addWeeks, subWeeks, parseISO } from 'date-fns';
-import { decodeTimeTrackMeta, formatMinutesToHours, nowInPortugal, todayInPortugal } from '@/lib/utils';
-import type { Employee } from '@/db/schema';
+import { useEffect, useState, useCallback } from 'react';
+import { Clock, Plus, Pencil, Trash2, X, AlertTriangle, Search } from 'lucide-react';
 
+interface Employee { id: string; name: string; }
 interface TimeEntry {
-  id: string; employeeId: string; employeeName: string | null; date: string;
-  entryTime: string; exitTime: string | null; breakStart: string | null;
-  breakEnd: string | null; breakTimes?: string | null; totalMinutes: number | null; notes: string | null; alerts: string | null;
+  id: string; employeeId: string; employeeName: string | null;
+  date: string; entryTime: string; exitTime: string | null;
+  breakStart: string | null; breakEnd: string | null;
+  totalMinutes: number | null; alerts: string | null;
 }
 
 export default function TimeEntriesPage() {
-  const router = useRouter();
   const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
-  const [currentDate, setCurrentDate] = useState(nowInPortugal());
-  const [selectedEmployee, setSelectedEmployee] = useState('');
-  const [showAllWeeks, setShowAllWeeks] = useState(false);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingEntry, setEditingEntry] = useState<TimeEntry | null>(null);
-  const [formData, setFormData] = useState({ employeeId: '', date: todayInPortugal(), entryTime: '', exitTime: '', breakStart: '', breakEnd: '', notes: '' });
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [form, setForm] = useState({ employeeId: '', date: '', entryTime: '', exitTime: '', breakStart: '', breakEnd: '', notes: '' });
 
-  const weekStart = startOfWeek(currentDate, { weekStartsOn: 0 });
-  const weekEnd = endOfWeek(currentDate, { weekStartsOn: 0 });
-
-  useEffect(() => { fetchEmployees(); }, []);
-  useEffect(() => { fetchEntries(); }, [currentDate, selectedEmployee, showAllWeeks]);
-
-  const fetchEmployees = async () => { try { setEmployees(await (await fetch('/api/employees')).json()); } catch (e) { console.error(e); } };
-  const fetchEntries = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (!showAllWeeks) {
-        params.set('startDate', format(weekStart, 'yyyy-MM-dd'));
-        params.set('endDate', format(weekEnd, 'yyyy-MM-dd'));
-      }
-      if (selectedEmployee) params.set('employeeId', selectedEmployee);
-      const query = params.toString();
-      setEntries(await (await fetch(`/api/time-entries${query ? `?${query}` : ''}`)).json());
-    } catch (e) { console.error(e); } finally { setLoading(false); }
-  };
+    const [entriesRes, empsRes] = await Promise.all([fetch('/api/time-entries'), fetch('/api/employees')]);
+    setEntries(await entriesRes.json());
+    setEmployees(await empsRes.json());
+    setLoading(false);
+  }, []);
 
-  const openModal = (entry?: TimeEntry) => {
-    setError('');
-    if (!entry && employees.length === 0) {
-      router.push('/employees');
-      return;
+  useEffect(() => { fetchData(); }, [fetchData]);
+
+  const resetForm = () => { setForm({ employeeId: '', date: '', entryTime: '', exitTime: '', breakStart: '', breakEnd: '', notes: '' }); setEditingId(null); setShowForm(false); };
+
+  const handleSave = async () => {
+    if (editingId) {
+      await fetch(`/api/time-entries/${editingId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+    } else {
+      await fetch('/api/time-entries', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
     }
-    if (entry) { setEditingEntry(entry); setFormData({ employeeId: entry.employeeId, date: entry.date, entryTime: entry.entryTime, exitTime: entry.exitTime || '', breakStart: entry.breakStart || '', breakEnd: entry.breakEnd || '', notes: entry.notes || '' }); }
-    else { setEditingEntry(null); setFormData({ employeeId: selectedEmployee || '', date: todayInPortugal(), entryTime: '', exitTime: '', breakStart: '', breakEnd: '', notes: '' }); }
-    setIsModalOpen(true);
-  };
-  const closeModal = () => { setIsModalOpen(false); setEditingEntry(null); setError(''); };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault(); setSaving(true); setError('');
-    try {
-      const res = await fetch(editingEntry ? `/api/time-entries/${editingEntry.id}` : '/api/time-entries', { method: editingEntry ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formData) });
-      if (res.ok) { fetchEntries(); closeModal(); } else { const d = await res.json(); setError(d.error || 'Erro'); }
-    } catch { setError('Erro ao guardar'); } finally { setSaving(false); }
+    resetForm(); fetchData();
   };
 
-  const handleDelete = async (id: string) => { if (!confirm('Eliminar este registo?')) return; try { await fetch(`/api/time-entries/${id}`, { method: 'DELETE' }); fetchEntries(); } catch (e) { console.error(e); } };
+  const handleEdit = (e: TimeEntry) => {
+    setForm({ employeeId: e.employeeId, date: e.date, entryTime: e.entryTime, exitTime: e.exitTime || '', breakStart: e.breakStart || '', breakEnd: e.breakEnd || '', notes: '' });
+    setEditingId(e.id); setShowForm(true);
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Eliminar este registo?')) return;
+    await fetch(`/api/time-entries/${id}`, { method: 'DELETE' });
+    fetchData();
+  };
+
+  const fmtMin = (m: number | null) => { if (!m) return '0h00m'; const h = Math.floor(m / 60); return `${h}h${String(m % 60).padStart(2, '0')}m`; };
+
+  const filtered = entries.filter(e => !search || (e.employeeName || '').toLowerCase().includes(search.toLowerCase()));
+
+  if (loading) return <div className="flex items-center justify-center min-h-[60vh]"><div className="animate-spin rounded-full h-10 w-10 border-2 border-blue-500 border-t-transparent" /></div>;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+    <div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-8 gap-4">
         <div>
-          <h1 className="text-lg font-extrabold tracking-widest uppercase font-mono">Picagem de Ponto</h1>
-          <p className="text-xs text-gray-400 font-mono mt-1">Registos de entrada e saída</p>
+          <h2 className="text-2xl font-bold flex items-center gap-2"><Clock className="w-6 h-6 text-blue-400" />Picagem de Ponto</h2>
+          <p className="text-sm text-gray-400 mt-1">Registos de entrada e saída</p>
         </div>
-        {employees.length > 0 ? (
-          <Button onClick={() => openModal()} icon={<Plus className="w-4 h-4" />}>Novo Registo</Button>
-        ) : (
-          <Button onClick={() => router.push('/employees')} icon={<Plus className="w-4 h-4" />}>Criar Funcionário Primeiro</Button>
-        )}
+        <button onClick={() => { resetForm(); setShowForm(true); }} className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-blue-500 transition-all flex items-center gap-2">
+          <Plus className="w-4 h-4" /> Novo Registo
+        </button>
       </div>
 
-      {/* Filters */}
-      <div className="glass-card rounded-xl p-4">
-        <div className="flex flex-col lg:flex-row lg:items-center gap-4">
-          <div className="flex items-center gap-2 flex-wrap">
-            <button onClick={() => { setShowAllWeeks(false); setCurrentDate(subWeeks(currentDate, 1)); }} disabled={showAllWeeks} className="p-2 hover:bg-white/5 rounded-lg transition-colors disabled:opacity-30"><ChevronLeft className="w-4 h-4 text-gray-400" /></button>
-            <div className="px-4 py-2 bg-black/40 border border-white/10 rounded-lg">
-              <span className="text-xs font-bold font-mono text-gray-300">
-                {showAllWeeks ? 'TODOS OS REGISTOS' : `${format(weekStart, 'dd/MM')} - ${format(weekEnd, 'dd/MM/yyyy')}`}
-              </span>
-            </div>
-            <button onClick={() => { setShowAllWeeks(false); setCurrentDate(addWeeks(currentDate, 1)); }} disabled={showAllWeeks} className="p-2 hover:bg-white/5 rounded-lg transition-colors disabled:opacity-30"><ChevronRight className="w-4 h-4 text-gray-400" /></button>
-            <Button variant="ghost" size="sm" onClick={() => { setShowAllWeeks(false); setCurrentDate(nowInPortugal()); }}>Hoje</Button>
-            <Button variant={showAllWeeks ? 'primary' : 'secondary'} size="sm" onClick={() => setShowAllWeeks(v => !v)}>
-              {showAllWeeks ? 'Ver Semana Atual' : 'Ver Tudo'}
-            </Button>
-          </div>
-          <div className="flex-1 max-w-xs">
-            <Select options={[{ value: '', label: 'Todos os funcionários' }, ...employees.map(e => ({ value: e.id, label: e.name }))]} value={selectedEmployee} onChange={(e) => setSelectedEmployee(e.target.value)} />
-          </div>
+      {/* Search */}
+      <div className="glass-card rounded-xl p-3 mb-6">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar por funcionário..." className="w-full pl-10 pr-4 py-2 bg-black/30 border border-white/10 rounded-lg text-sm text-white placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50" />
         </div>
       </div>
 
-      {/* Table */}
-      <div className="glass-card rounded-xl neon-blue overflow-hidden">
-        {loading ? (
-          <div className="flex items-center justify-center py-16"><div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent"></div></div>
-        ) : entries.length === 0 ? (
-          <div className="text-center py-16">
-            <Clock className="w-12 h-12 text-gray-700 mx-auto mb-3" />
-            <h3 className="text-sm font-bold text-gray-400">Sem registos</h3>
-            <p className="text-xs text-gray-600 mt-1 font-mono">
-              {employees.length === 0
-                ? 'Não existem funcionários. Cria um funcionário primeiro.'
-                : showAllWeeks
-                  ? 'Não existem registos na base de dados'
-                  : 'Nenhum registo nesta semana'}
-            </p>
-            <div className="mt-4 flex items-center justify-center gap-3 flex-wrap">
-              {employees.length === 0 ? (
-                <Button onClick={() => router.push('/employees')} icon={<Plus className="w-4 h-4" />}>Criar Funcionário</Button>
-              ) : (
-                <Button onClick={() => openModal()} icon={<Plus className="w-4 h-4" />}>Novo Registo</Button>
-              )}
-              {!showAllWeeks && employees.length > 0 && <Button variant="secondary" onClick={() => setShowAllWeeks(true)}>Ver Todos os Registos</Button>}
-            </div>
-          </div>
+      {/* Entries Table */}
+      <div className="glass-card rounded-2xl overflow-hidden">
+        {filtered.length === 0 ? (
+          <div className="text-center py-16"><Clock className="w-12 h-12 text-gray-700 mx-auto mb-3" /><p className="text-gray-500">Nenhum registo encontrado</p></div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-black/30">
-                <tr>
-                  {['Funcionário','Data','Entrada','Saída','Pausa','Total','Alertas',''].map(h => (
-                    <th key={h} className={`${h === '' ? 'text-right' : 'text-left'} py-3 px-4 text-[10px] font-bold text-gray-500 uppercase tracking-widest`}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
+              <thead><tr className="border-b border-white/10">
+                <th className="text-left px-4 py-3 text-[10px] text-gray-500 font-bold uppercase tracking-wider">Funcionário</th>
+                <th className="text-left px-4 py-3 text-[10px] text-gray-500 font-bold uppercase tracking-wider">Data</th>
+                <th className="text-left px-4 py-3 text-[10px] text-gray-500 font-bold uppercase tracking-wider">Entrada</th>
+                <th className="text-left px-4 py-3 text-[10px] text-gray-500 font-bold uppercase tracking-wider">Saída</th>
+                <th className="text-left px-4 py-3 text-[10px] text-gray-500 font-bold uppercase tracking-wider">Pausa</th>
+                <th className="text-left px-4 py-3 text-[10px] text-gray-500 font-bold uppercase tracking-wider">Total</th>
+                <th className="text-left px-4 py-3 text-[10px] text-gray-500 font-bold uppercase tracking-wider">Alertas</th>
+                <th className="text-left px-4 py-3 text-[10px] text-gray-500 font-bold uppercase tracking-wider">Ações</th>
+              </tr></thead>
               <tbody>
-                {entries.map((entry) => {
-                  let parsedAlerts: Array<{ level?: string; code?: string; message: string; field?: string }> = [];
-                  if (entry.alerts) {
-                    try {
-                      const raw = JSON.parse(entry.alerts);
-                      if (Array.isArray(raw)) {
-                        parsedAlerts = raw.map((a: string | { level?: string; code?: string; message: string; field?: string }) =>
-                          typeof a === 'string' ? { level: 'warning', code: 'LEGACY', message: a } : a
-                        );
-                      }
-                    } catch { /* ignore */ }
-                  }
-                  let breakList: string[] = [];
-                  if (entry.breakTimes) {
-                    try {
-                      const rawBreaks = JSON.parse(entry.breakTimes);
-                      if (Array.isArray(rawBreaks)) {
-                        breakList = rawBreaks;
-                      }
-                    } catch { /* ignore */ }
-                  }
-                  if (breakList.length === 0) {
-                    const meta = decodeTimeTrackMeta(entry.notes);
-                    if (meta?.breakTimes?.length) {
-                      breakList = meta.breakTimes;
-                    }
-                  }
-                  if (breakList.length === 0) {
-                    breakList = [entry.breakStart, entry.breakEnd].filter(Boolean) as string[];
-                  }
-
-                  const errorCount = parsedAlerts.filter(a => a.level === 'error').length;
-                  const warnCount = parsedAlerts.filter(a => a.level !== 'error').length;
-                  const hasErrors = errorCount > 0;
-                  const hasWarnings = warnCount > 0;
-                  const isClean = parsedAlerts.length === 0 && !!entry.entryTime && !!entry.exitTime;
-
+                {filtered.map(e => {
+                  let alerts: Array<{ level: string; message: string }> = [];
+                  try { if (e.alerts) alerts = JSON.parse(e.alerts); } catch { /* ignore */ }
                   return (
-                    <tr key={entry.id} className={`border-t hover:bg-white/[0.02] transition-colors ${hasErrors ? 'border-red-500/20 bg-red-500/[0.03]' : 'border-white/5'}`}>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2">
-                          <div className={`w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold border ${hasErrors ? 'bg-red-500/20 border-red-500/30 text-red-400' : isClean ? 'bg-green-500/20 border-green-500/30 text-green-400' : 'bg-blue-500/20 border-blue-500/30 text-blue-400'}`}>{entry.employeeName?.charAt(0) || '?'}</div>
-                          <span className="text-sm font-bold text-gray-300">{entry.employeeName}</span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-4 text-xs font-mono text-gray-400">{format(parseISO(entry.date), 'dd/MM/yyyy')}</td>
-                      <td className="py-3 px-4">
-                        {parsedAlerts.some(a => a.field === 'entrada') ? (
-                          <span className="px-2 py-0.5 bg-red-500/10 text-red-400 border border-red-500/30 rounded text-xs font-mono font-bold">{entry.entryTime} ⚠</span>
-                        ) : (
-                          <span className="px-2 py-0.5 bg-green-500/10 text-green-400 border border-green-500/30 rounded text-xs font-mono font-bold">{entry.entryTime}</span>
-                        )}
-                      </td>
-                      <td className="py-3 px-4">
-                        {!entry.exitTime ? (
-                          <span className="px-2 py-0.5 bg-red-500/10 text-red-400 border border-red-500/30 rounded text-[10px] font-bold animate-pulse">SEM SAÍDA</span>
-                        ) : parsedAlerts.some(a => a.field === 'saida') ? (
-                          <span className="px-2 py-0.5 bg-red-500/10 text-red-400 border border-red-500/30 rounded text-xs font-mono font-bold">{entry.exitTime} ⚠</span>
-                        ) : (
-                          <span className="px-2 py-0.5 bg-green-500/10 text-green-400 border border-green-500/30 rounded text-xs font-mono font-bold">{entry.exitTime}</span>
-                        )}
-                      </td>
-                      <td className="py-3 px-4 text-xs font-mono text-gray-500">
-                        {breakList.length >= 2
-                          ? breakList.reduce<string[]>((acc, time, index) => {
-                              if (index % 2 === 0 && breakList[index + 1]) {
-                                acc.push(`${time} - ${breakList[index + 1]}`);
-                              }
-                              return acc;
-                            }, []).join(' | ')
-                          : breakList.length === 1
-                            ? breakList[0]
-                            : '-'}
-                      </td>
-                      <td className="py-3 px-4"><span className={`text-sm font-extrabold font-mono ${hasErrors ? 'text-red-400' : isClean ? 'text-green-400' : 'text-amber-400'}`}>{entry.totalMinutes ? formatMinutesToHours(entry.totalMinutes) : '—'}</span></td>
-                      <td className="py-3 px-4">
-                        {isClean ? (
-                          <span className="flex items-center gap-1 px-1.5 py-0.5 bg-green-500/10 border border-green-500/30 rounded text-[10px] font-bold text-green-400"><CheckCircle className="w-3 h-3" />OK</span>
-                        ) : parsedAlerts.length > 0 && (
-                          <div className="group relative">
-                            <div className="flex items-center gap-1.5 cursor-pointer">
-                              {hasErrors && <span className="flex items-center gap-0.5 px-1.5 py-0.5 bg-red-500/10 border border-red-500/30 rounded text-[10px] font-bold text-red-400"><XCircle className="w-3 h-3" />{errorCount}</span>}
-                              {hasWarnings && <span className="flex items-center gap-0.5 px-1.5 py-0.5 bg-amber-500/10 border border-amber-500/30 rounded text-[10px] font-bold text-amber-400"><AlertTriangle className="w-3 h-3" />{warnCount}</span>}
-                            </div>
-                            <div className="hidden group-hover:block absolute right-0 top-full mt-1 z-20 w-72 p-3 glass-card rounded-lg neon-red text-left">
-                              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-2">Alertas do Registo</p>
-                              <ul className="space-y-1.5">
-                                {parsedAlerts.map((alert, i) => (
-                                  <li key={i} className={`text-[11px] font-mono flex items-start gap-2 ${alert.level === 'error' ? 'text-red-400' : 'text-amber-400'}`}>
-                                    {alert.level === 'error' ? <XCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> : <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />}
-                                    <span>{alert.message}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3 px-4 text-right">
-                        <div className="flex justify-end gap-1">
-                          <button onClick={() => openModal(entry)} className="p-1.5 hover:bg-white/10 rounded-lg transition-colors"><Edit2 className="w-3.5 h-3.5 text-gray-500" /></button>
-                          <button onClick={() => handleDelete(entry.id)} className="p-1.5 hover:bg-red-500/10 rounded-lg transition-colors"><Trash2 className="w-3.5 h-3.5 text-red-500/60" /></button>
-                        </div>
-                      </td>
+                    <tr key={e.id} className="border-b border-white/5 hover:bg-white/[0.02]">
+                      <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-[10px] font-bold">{e.employeeName?.charAt(0) || '?'}</div><span className="text-sm">{e.employeeName}</span></div></td>
+                      <td className="px-4 py-3 text-sm font-mono text-gray-300">{e.date.split('-').reverse().join('/')}</td>
+                      <td className="px-4 py-3 text-sm font-mono text-green-400">{e.entryTime}</td>
+                      <td className="px-4 py-3 text-sm font-mono text-gray-300">{e.exitTime || <span className="text-red-400">--:--</span>}</td>
+                      <td className="px-4 py-3 text-sm font-mono text-purple-300">{e.breakStart && e.breakEnd ? `${e.breakStart}-${e.breakEnd}` : <span className="text-gray-600">—</span>}</td>
+                      <td className="px-4 py-3 text-sm font-mono text-amber-400 font-bold">{fmtMin(e.totalMinutes)}</td>
+                      <td className="px-4 py-3">{alerts.length > 0 ? <AlertTriangle className={`w-4 h-4 ${alerts.some(a => a.level === 'error') ? 'text-red-400' : 'text-amber-400'}`} /> : <span className="text-green-400 text-[10px]">✓</span>}</td>
+                      <td className="px-4 py-3"><div className="flex items-center gap-1">
+                        <button onClick={() => handleEdit(e)} className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-blue-400 transition-all"><Pencil className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => handleDelete(e.id)} className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-red-400 transition-all"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </div></td>
                     </tr>
                   );
                 })}
@@ -260,26 +121,53 @@ export default function TimeEntriesPage() {
         )}
       </div>
 
-      <Modal isOpen={isModalOpen} onClose={closeModal} title={editingEntry ? 'Editar Registo' : 'Novo Registo'} size="lg">
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {error && <div className="p-3 bg-red-500/10 border border-red-500/30 text-red-400 rounded-lg text-xs font-mono">{error}</div>}
-          {!editingEntry && <Select label="Funcionário *" options={employees.map(e => ({ value: e.id, label: e.name }))} value={formData.employeeId} onChange={(e) => setFormData({ ...formData, employeeId: e.target.value })} required />}
-          <DateInput label="Data *" value={formData.date} onChange={(v) => setFormData({ ...formData, date: v })} required disabled={!!editingEntry} />
-          <div className="grid grid-cols-2 gap-4">
-            <TimeInput label="Hora de Entrada *" value={formData.entryTime} onChange={(v) => setFormData({ ...formData, entryTime: v })} required placeholder="09:00" />
-            <TimeInput label="Hora de Saída" value={formData.exitTime} onChange={(v) => setFormData({ ...formData, exitTime: v })} placeholder="18:00" />
+      {/* Form Modal */}
+      {showForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={resetForm} />
+          <div className="relative bg-slate-900 border border-white/10 rounded-2xl w-full max-w-lg p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-bold">{editingId ? 'Editar Registo' : 'Novo Registo'}</h3>
+              <button onClick={resetForm} className="p-1 rounded-lg hover:bg-white/10"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="space-y-4">
+              {!editingId && (
+                <>
+                  <div><label className="text-xs text-gray-400 block mb-1">Funcionário</label>
+                    <select value={form.employeeId} onChange={e => setForm({ ...form, employeeId: e.target.value })} className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-blue-500/50">
+                      <option value="">Selecionar...</option>
+                      {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
+                    </select>
+                  </div>
+                  <div><label className="text-xs text-gray-400 block mb-1">Data</label>
+                    <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-blue-500/50" />
+                  </div>
+                </>
+              )}
+              <div className="grid grid-cols-2 gap-4">
+                <div><label className="text-xs text-gray-400 block mb-1">Entrada</label>
+                  <input type="time" value={form.entryTime} onChange={e => setForm({ ...form, entryTime: e.target.value })} className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-blue-500/50" />
+                </div>
+                <div><label className="text-xs text-gray-400 block mb-1">Saída</label>
+                  <input type="time" value={form.exitTime} onChange={e => setForm({ ...form, exitTime: e.target.value })} className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-blue-500/50" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div><label className="text-xs text-gray-400 block mb-1">Início Pausa</label>
+                  <input type="time" value={form.breakStart} onChange={e => setForm({ ...form, breakStart: e.target.value })} className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-blue-500/50" />
+                </div>
+                <div><label className="text-xs text-gray-400 block mb-1">Fim Pausa</label>
+                  <input type="time" value={form.breakEnd} onChange={e => setForm({ ...form, breakEnd: e.target.value })} className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-blue-500/50" />
+                </div>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button onClick={resetForm} className="flex-1 px-4 py-2 rounded-lg bg-white/5 text-sm hover:bg-white/10 transition-all">Cancelar</button>
+                <button onClick={handleSave} className="flex-1 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-bold hover:bg-blue-500 transition-all">Guardar</button>
+              </div>
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <TimeInput label="Início da Pausa" value={formData.breakStart} onChange={(v) => setFormData({ ...formData, breakStart: v })} placeholder="12:30" />
-            <TimeInput label="Fim da Pausa" value={formData.breakEnd} onChange={(v) => setFormData({ ...formData, breakEnd: v })} placeholder="13:30" />
-          </div>
-          <Input label="Notas" value={formData.notes} onChange={(e) => setFormData({ ...formData, notes: e.target.value })} placeholder="Observações opcionais" />
-          <div className="flex justify-end gap-3 pt-3">
-            <Button type="button" variant="secondary" onClick={closeModal}>Cancelar</Button>
-            <Button type="submit" loading={saving}>{editingEntry ? 'Guardar' : 'Criar'}</Button>
-          </div>
-        </form>
-      </Modal>
+        </div>
+      )}
     </div>
   );
 }
