@@ -143,21 +143,23 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   }
 
   // ========== 4. EXTRAI PAUSAS ==========
-  // Suporta múltiplos formatos:
-  //   Pausa: 12:30 - 13:50
-  //   Pausa: 12:30 - 13:50 | 19:30 - 21:00
-  //   Pausa: 09:42
-  //   Múltiplas linhas "Pausa:"
   const breakTimes: string[] = [];
 
-  // Encontra todas as linhas/menções de "Pausa" e extrai o conteúdo completo
-  const pauseLineRegex = /(?:Hora\s*(?:De\s*)?Pausa|Pausa)\s*[:]?\s*(.*)/gi;
-  let pauseLineMatch;
+  // Processa linha a linha para evitar capturar conteúdo de outras linhas
+  const lines = normalizedText.split(/\n/);
   const pauseContents: string[] = [];
 
-  while ((pauseLineMatch = pauseLineRegex.exec(normalizedText)) !== null) {
-    if (pauseLineMatch[1] && pauseLineMatch[1].trim()) {
-      pauseContents.push(pauseLineMatch[1].trim());
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    // Ignora linhas que são de Entrada, Saída, Data, Resumo
+    if (/(?:Hora\s*(?:De\s*)?Entrada|Entrada)\s*[:]?\s*\d/i.test(trimmedLine)) continue;
+    if (/(?:Hora\s*(?:De\s*)?Sa[íi]da|Sa[íi]da)\s*[:]?\s*/i.test(trimmedLine)) continue;
+    if (/Data\s*[:]?\s*\d/i.test(trimmedLine)) continue;
+    if (/Resumo/i.test(trimmedLine)) continue;
+
+    const pauseMatch = trimmedLine.match(/(?:Hora\s*(?:De\s*)?Pausa|Pausa)\s*[:]?\s*(.*)/i);
+    if (pauseMatch && pauseMatch[1] && pauseMatch[1].trim()) {
+      pauseContents.push(pauseMatch[1].trim());
     }
   }
 
@@ -228,6 +230,17 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
       }
     }
   }
+
+  // ========== 4b. LIMPA PAUSAS ==========
+  // Remove break que é igual à entrada ou saída (bug de captura)
+  const cleanedBreaks: string[] = [];
+  for (const bt of breakTimes) {
+    if (bt === entryTime) continue;
+    if (bt === exitTime) continue;
+    cleanedBreaks.push(bt);
+  }
+  breakTimes.length = 0;
+  breakTimes.push(...cleanedBreaks);
 
   // ========== 5. CALCULA TOTAL ==========
   let totalMinutes = 0;

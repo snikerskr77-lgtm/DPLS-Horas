@@ -160,11 +160,23 @@ async function processMessage(content: string, agentName: string, stats: SyncSta
       .from(timeEntries)
       .where(and(eq(timeEntries.employeeId, employee.id), eq(timeEntries.date, parsed.date)));
 
+    // Limpa breakTimes: remove horas iguais à saída (bug do parser)
+    let cleanBreaks = (parsed.breakTimes || []).filter(Boolean);
+    if (parsed.exitTime && cleanBreaks.length > 0) {
+      // Remove último break se igual à saída
+      if (cleanBreaks[cleanBreaks.length - 1] === parsed.exitTime) {
+        cleanBreaks = cleanBreaks.slice(0, -1);
+      }
+    }
+
+    const breakTimesJson = cleanBreaks.length > 0 ? JSON.stringify(cleanBreaks) : null;
+
     const baseValues = {
       entryTime: parsed.entryTime,
       exitTime: parsed.exitTime || null,
-      breakStart: parsed.breakTimes?.[0] || null,
-      breakEnd: parsed.breakTimes?.[1] || null,
+      breakStart: cleanBreaks[0] || null,
+      breakEnd: cleanBreaks[1] || null,
+      breakTimes: breakTimesJson,
       totalMinutes: parsed.totalMinutes ?? 0,
       notes: notesMeta,
       alerts: alertsJson,
