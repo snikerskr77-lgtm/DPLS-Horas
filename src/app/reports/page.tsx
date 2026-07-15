@@ -38,11 +38,20 @@ interface WeeklyReport {
   }>;
 }
 
+function formatPeriodsForExcel(periods: string[]): string {
+  return periods.map((period) => period.replace('-', ' e ')).join(' , ');
+}
+
+function expandPeriodTimes(periods: string[]): string[] {
+  return periods.flatMap((period) => period.split('-')).filter(Boolean);
+}
+
 export default function ReportsPage() {
   const [report, setReport] = useState<WeeklyReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentDate, setCurrentDate] = useState(nowInPortugal());
   const [agentSearch, setAgentSearch] = useState('');
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   useEffect(() => { fetchReport(); }, [currentDate]);
 
@@ -75,9 +84,19 @@ export default function ReportsPage() {
     ).sort((a, b) => a.employeeName.localeCompare(b.employeeName) || a.date.localeCompare(b.date));
   }, [filteredReport]);
 
+  const copyText = async (text: string, key: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey((current) => current === key ? null : current), 1500);
+    } catch (error) {
+      console.error('Erro ao copiar:', error);
+    }
+  };
+
   const exportCSV = () => {
     if (!report) return;
-    const headers = ['Funcionário', 'Data', 'Entrada', 'Pausas', 'Saída', 'Períodos de Trabalho', 'Total Horas', 'Alertas'];
+    const headers = ['Funcionário', 'Data', 'Entrada', 'Pausas', 'Saída', 'Períodos de Trabalho', 'Formato Excel', 'Total Horas', 'Alertas'];
     const rows = detailedRows.map((row) => [
       row.employeeName,
       format(parseISO(row.date), 'dd/MM/yyyy'),
@@ -94,6 +113,7 @@ export default function ReportsPage() {
         : '',
       row.entry.exitTime || '',
       row.entry.periods.join(' | '),
+      formatPeriodsForExcel(row.entry.periods),
       formatMinutesToHours(row.entry.totalMinutes),
       row.entry.alerts ? 'Sim' : '',
     ]);
@@ -183,9 +203,27 @@ export default function ReportsPage() {
                               <span className="text-xs font-bold font-mono text-green-400">{formatMinutesToHours(entry.totalMinutes)}</span>
                               <span className="text-[10px] text-gray-500 font-mono">{entry.entryTime} → {entry.exitTime || '...'}</span>
                               {entry.periods.length > 0 && (
-                                <span className="text-[10px] text-blue-300/80 font-mono whitespace-pre-wrap leading-4">
-                                  {entry.periods.join(' | ')}
-                                </span>
+                                <div className="flex flex-col items-center gap-1.5">
+                                  <div className="flex flex-wrap justify-center gap-1">
+                                    {expandPeriodTimes(entry.periods).map((time, idx) => {
+                                      const timeKey = `${row.employeeId}-${day}-matrix-${time}-${idx}`;
+                                      return (
+                                        <button
+                                          key={timeKey}
+                                          type="button"
+                                          onClick={() => copyText(time, timeKey)}
+                                          className="rounded-md border border-blue-500/20 bg-blue-500/10 px-2 py-1 text-[10px] text-blue-200 font-mono hover:bg-blue-500/20 hover:border-blue-400/40 transition-colors"
+                                          title={`Copiar ${time}`}
+                                        >
+                                          {copiedKey === timeKey ? 'Copiado' : time}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                  <div className="rounded-md border border-blue-500/10 bg-blue-500/[0.04] px-2 py-1 text-[10px] text-blue-300/70 font-mono leading-4 select-all cursor-text">
+                                    {formatPeriodsForExcel(entry.periods)}
+                                  </div>
+                                </div>
                               )}
                               {entry.alerts && <AlertTriangle className="w-3 h-3 text-amber-500 mt-0.5" />}
                             </div>
@@ -228,13 +266,13 @@ export default function ReportsPage() {
         <div className="glass-card rounded-xl neon-amber overflow-hidden">
           <div className="p-4 border-b border-white/5">
             <h2 className="text-xs font-bold uppercase tracking-widest text-gray-400">Detalhe para Excel</h2>
-            <p className="text-[10px] text-gray-600 font-mono mt-1">Entrada, pausas, saída e períodos de trabalho por agente</p>
+            <p className="text-[10px] text-gray-600 font-mono mt-1">Copia diretamente no formato: 18:10 e 20:10 , 22:10 e 22:30 , 00:20 e 01:45</p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-black/30">
                 <tr>
-                  {['Agente', 'Data', 'Entrada', 'Pausas', 'Saída', 'Períodos de Trabalho', 'Total'].map((h) => (
+                  {['Agente', 'Data', 'Entrada', 'Pausas', 'Saída', 'Horas para Copiar', 'Texto Excel', 'Total'].map((h) => (
                     <th key={h} className="text-left py-3 px-4 text-[10px] font-bold text-gray-500 uppercase tracking-widest">{h}</th>
                   ))}
                 </tr>
@@ -249,15 +287,41 @@ export default function ReportsPage() {
                     }
                     return acc;
                   }, []);
+                  const excelFormat = formatPeriodsForExcel(row.entry.periods);
+                  const individualTimes = expandPeriodTimes(row.entry.periods);
+                  const copyKey = `${row.employeeId}-${row.date}-${idx}`;
 
                   return (
-                    <tr key={`${row.employeeId}-${row.date}-${idx}`} className="border-t border-white/5 hover:bg-white/[0.02] transition-colors">
+                    <tr key={copyKey} className="border-t border-white/5 hover:bg-white/[0.02] transition-colors align-top">
                       <td className="py-3 px-4 text-xs font-bold text-gray-300">{row.employeeName}</td>
                       <td className="py-3 px-4 text-xs font-mono text-gray-400">{format(parseISO(row.date), 'dd/MM/yyyy')}</td>
                       <td className="py-3 px-4 text-xs font-mono text-green-400 font-bold">{row.entry.entryTime}</td>
                       <td className="py-3 px-4 text-xs font-mono text-gray-300">{pauseGroups.join(' , ') || '—'}</td>
                       <td className="py-3 px-4 text-xs font-mono text-red-400 font-bold">{row.entry.exitTime || '—'}</td>
-                      <td className="py-3 px-4 text-xs font-mono text-blue-300">{row.entry.periods.join(' , ') || '—'}</td>
+                      <td className="py-3 px-4 min-w-[260px]">
+                        <div className="flex flex-wrap gap-1.5">
+                          {individualTimes.length > 0 ? individualTimes.map((time, timeIndex) => {
+                            const timeKey = `${copyKey}-${time}-${timeIndex}`;
+                            return (
+                              <button
+                                key={timeKey}
+                                type="button"
+                                onClick={() => copyText(time, timeKey)}
+                                className="rounded-md border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-xs font-mono text-amber-200 hover:border-amber-400/40 hover:bg-amber-500/20 hover:text-amber-100 transition-colors"
+                                title={`Copiar ${time}`}
+                              >
+                                {copiedKey === timeKey ? 'Copiado' : time}
+                              </button>
+                            );
+                          }) : <span className="text-xs text-gray-600 font-mono">—</span>}
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 min-w-[320px]">
+                        <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 px-3 py-2 text-xs font-mono text-blue-300 select-all leading-5 cursor-text">
+                          {excelFormat || '—'}
+                        </div>
+                        <p className="mt-1 text-[10px] text-gray-600 font-mono">Seleciona este texto se precisares da linha completa.</p>
+                      </td>
                       <td className="py-3 px-4 text-xs font-mono text-amber-400 font-bold">{formatMinutesToHours(row.entry.totalMinutes)}</td>
                     </tr>
                   );
