@@ -1,4 +1,5 @@
 // Parser para mensagens de picagem de ponto do Discord
+// Versão robusta — lida com erros de formatação comuns (;  .  espaços  etc.)
 
 export type AlertLevel = 'error' | 'warning';
 
@@ -47,8 +48,38 @@ function timeToMinutes(time: string): number {
   return hours * 60 + minutes;
 }
 
+/**
+ * Normalização agressiva do texto para lidar com erros de formatação comuns:
+ * - Substitui ; por : em contextos de hora (19;20 → 19:20)
+ * - Substitui . por : em contextos de hora (19.20 → 19:20)
+ * - Remove espaços dentro de horas (19 : 20 → 19:20)
+ * - Converte notação hH (19h20 → 19:20)
+ * - Remove emojis comuns
+ */
+function normalizeText(raw: string): string {
+  let text = raw;
+
+  // Remove emojis comuns de picagem
+  text = text.replace(/🕐|📆|🖊️|•|📝|⏰|🕑|🕒|🕓|🕔|🕕|🕖|🕗|🕘|🕙|🕚|🕛|⏱️|📋|✅|❌|🔴|🟢|🟡/g, '');
+
+  // Normaliza notação hH: 19h20 → 19:20, 8H30 → 8:30
+  text = text.replace(/\b(\d{1,2})\s*[hH]\s*(\d{2})\b/g, '$1:$2');
+
+  // Normaliza ; para : em contexto de hora: 19;20 → 19:20
+  text = text.replace(/\b(\d{1,2})\s*;\s*(\d{2})\b/g, '$1:$2');
+
+  // Normaliza . para : em contexto de hora: 19.20 → 19:20
+  // Cuidado para não converter datas (15/07/2026)
+  text = text.replace(/\b(\d{1,2})\s*\.\s*(\d{2})\b(?!\s*[/-]\s*\d)/g, '$1:$2');
+
+  // Remove espaços dentro de horas: 19 : 20 → 19:20
+  text = text.replace(/\b(\d{1,2})\s*:\s*(\d{2})\b/g, '$1:$2');
+
+  return text.trim();
+}
+
 export function extractAgentName(threadTitle: string): string {
-  let name = threadTitle
+  const name = threadTitle
     .replace(/picagem de ponto\s*[-–—]?\s*/i, '')
     .replace(/picagem\s*[-–—]?\s*/i, '')
     .trim();
@@ -67,15 +98,30 @@ function extractAgentNameFromContent(text: string): string | undefined {
   return raw;
 }
 
+/**
+ * Extrai todas as horas HH:MM de uma string, incluindo variantes com ;  .  h  espaços
+ * Retorna horas já normalizadas no formato HH:MM
+ */
+function extractAllTimes(text: string): string[] {
+  // Já normalizado pelo normalizeText, mas fazemos outra passagem por segurança
+  const normalized = text
+    .replace(/\b(\d{1,2})\s*[hH]\s*(\d{2})\b/g, '$1:$2')
+    .replace(/\b(\d{1,2})\s*;\s*(\d{2})\b/g, '$1:$2')
+    .replace(/\b(\d{1,2})\s*\.\s*(\d{2})\b(?!\s*[/-]\s*\d)/g, '$1:$2')
+    .replace(/\b(\d{1,2})\s*:\s*(\d{2})\b/g, '$1:$2');
+
+  const matches = normalized.match(/\d{1,2}:\d{2}/g) || [];
+  return matches.filter(t => isValidTime(t));
+}
+
 export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
-  const cleanText = content.replace(/🕐|📆|🖊️|•|📝/g, '').trim();
-  const normalizedText = cleanText.replace(/\b(\d{1,2})\s*[hH]\s*(\d{2})\b/g, '$1:$2');
+  const normalizedText = normalizeText(content);
 
   const alerts: ParsedAlert[] = [];
   const agentName = extractAgentNameFromContent(normalizedText);
 
   // ========== 1. EXTRAI DATA ==========
-  const dateRegex = /Data\s*[:]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})/i;
+  const dateRegex = /Data\s*[:]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i;
   const dateMatch = normalizedText.match(dateRegex);
 
   if (!dateMatch) {
@@ -96,9 +142,18 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
     return { valid: false, complete: false, alerts, rawAlerts: alerts.map(a => a.message) };
   }
 
-  const [day, month, year] = dateParts;
+  const [day, month, yearRaw] = dateParts;
+  // Handle 2-digit year
+  const year = yearRaw.length === 2 ? `20${yearRaw}` : yearRaw;
   const formattedDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
   const displayDate = `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`;
+
+  // Validate date is real
+  const dateObj = new Date(`${formattedDate}T00:00:00`);
+  if (isNaN(dateObj.getTime())) {
+    alerts.push({ level: 'error', code: 'INVALID_DATE', message: `Data inválida: "${dateStr}".`, field: 'data' });
+    return { valid: false, complete: false, alerts, rawAlerts: alerts.map(a => a.message) };
+  }
 
   // ========== 2. EXTRAI HORA DE ENTRADA ==========
   const entryRegex = /(?:Hora\s*(?:De\s*)?Entrada|Entrada)\s*[:]?\s*(\d{1,2}:\d{2})?/i;
@@ -164,20 +219,17 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   }
 
   for (const content of pauseContents) {
-    // Estratégia simples e robusta: extrair TODAS as horas HH:MM do conteúdo
-    // Funciona com qualquer separador: - / | espaço , etc.
-    // Ex: "03:05 - 16:35 21:45 - 22:55" → [03:05, 16:35, 21:45, 22:55]
-    // Ex: "17:00 / 21:25"               → [17:00, 21:25]
-    // Ex: "12:30 - 13:50 | 19:30 - 21:00" → [12:30, 13:50, 19:30, 21:00]
-    const allTimes = content.match(/\d{1,2}:\d{2}/g) || [];
+    // Estratégia robusta: extrair TODAS as horas de qualquer formato
+    // Funciona com qualquer separador: - / | espaço , as das e etc.
+    // Ex: "18:30 as 19;20 E DAS 20:10 as 22:15" → [18:30, 19:20, 20:10, 22:15]
+    const allTimes = extractAllTimes(content);
 
     for (const t of allTimes) {
-      if (!isValidTime(t)) continue;
       if (!validateTimeMinutes(t)) {
-        alerts.push({ level: 'error', code: 'BREAK_NOT_ROUND', message: `Pausa ${t} não termina em 0 ou 5.`, field: 'pausa' });
-      } else {
-        breakTimes.push(t);
+        // AVISO, mas aceita a hora (não bloqueia como erro)
+        alerts.push({ level: 'warning', code: 'BREAK_NOT_ROUND', message: `Pausa ${t} não termina em 0 ou 5.`, field: 'pausa' });
       }
+      breakTimes.push(t);
     }
   }
 
@@ -191,6 +243,16 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   }
   breakTimes.length = 0;
   breakTimes.push(...cleanedBreaks);
+
+  // Validação: número de breakTimes deve ser par (início/fim de cada pausa)
+  if (breakTimes.length > 0 && breakTimes.length % 2 !== 0) {
+    alerts.push({
+      level: 'warning',
+      code: 'ODD_BREAKS',
+      message: `Número ímpar de horários de pausa (${breakTimes.length}). Verifique se falta um horário.`,
+      field: 'pausa',
+    });
+  }
 
   // ========== 5. CALCULA TOTAL ==========
   let totalMinutes = 0;
@@ -207,7 +269,9 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
     const adjusted: number[] = [sequence[0]];
     for (let i = 1; i < sequence.length; i++) {
       let val = sequence[i];
-      if (val < adjusted[i - 1]) val += 1440;
+      while (val < adjusted[i - 1]) {
+        val += 1440;
+      }
       adjusted.push(val);
     }
 
@@ -218,6 +282,16 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
       }
     }
     totalMinutes = Math.max(0, totalMinutes);
+
+    // Sanity check: mais de 16h de trabalho é suspeito
+    if (totalMinutes > 960) {
+      alerts.push({
+        level: 'warning',
+        code: 'EXCESSIVE_HOURS',
+        message: `Total de ${Math.floor(totalMinutes / 60)}h${(totalMinutes % 60).toString().padStart(2, '0')}m parece excessivo. Verifique os horários.`,
+        field: 'total',
+      });
+    }
 
     const hours = Math.floor(totalMinutes / 60);
     const mins = totalMinutes % 60;
