@@ -1,5 +1,12 @@
 // Parser para mensagens de picagem de ponto do Discord
-// Versão robusta — lida com erros de formatação comuns (;  .  espaços  etc.)
+// Versão 3 — ordenação cronológica automática a partir da entrada + pairing robusto
+//
+// Princípios:
+// 1) Tudo o que parece HH:MM é capturado, com qualquer separador ("as", "às", "E DAS", "-", ";", "|", espaços…)
+// 2) As horas de pausa são ORDENADAS cronologicamente a partir da hora de entrada
+//    (resolve o pessoal que "inventa" e escreve as pausas fora de ordem)
+// 3) Suporta turnos que passam da meia-noite (entrada 22:00 → saída 06:00)
+// 4) ; . h espaços dentro de horas são normalizados (19;20 → 19:20, 19.20 → 19:20, 19h20 → 19:20)
 
 export type AlertLevel = 'error' | 'warning';
 
@@ -10,6 +17,11 @@ export interface ParsedAlert {
   field?: string;
 }
 
+export interface WorkPeriod {
+  start: string; // HH:MM (pode ser 25:00+ se cruzar meia-noite)
+  end: string;
+}
+
 export interface ParsedTimeEntry {
   valid: boolean;
   complete: boolean;
@@ -17,13 +29,18 @@ export interface ParsedTimeEntry {
   dateDisplay?: string;
   entryTime?: string;
   exitTime?: string;
-  breakTimes?: string[];
+  breakTimes?: string[];       // ORDENADAS cronologicamente a partir da entrada
   totalMinutes?: number;
   totalFormatted?: string;
+  periods?: WorkPeriod[];      // períodos de trabalho em pares
   alerts: ParsedAlert[];
   rawAlerts: string[];
   agentName?: string;
 }
+
+// ─────────────────────────────────────────────
+// Utilitários de tempo
+// ─────────────────────────────────────────────
 
 function validateTimeMinutes(timeStr: string): boolean {
   try {
@@ -48,35 +65,61 @@ function timeToMinutes(time: string): number {
   return hours * 60 + minutes;
 }
 
-/**
- * Normalização agressiva do texto para lidar com erros de formatação comuns:
- * - Substitui ; por : em contextos de hora (19;20 → 19:20)
- * - Substitui . por : em contextos de hora (19.20 → 19:20)
- * - Remove espaços dentro de horas (19 : 20 → 19:20)
- * - Converte notação hH (19h20 → 19:20)
- * - Remove emojis comuns
- */
+function minutesToTime(totalMinutes: number): string {
+  const normalized = ((totalMinutes % 1440) + 1440) % 1440;
+  return `${String(Math.floor(normalized / 60)).padStart(2, '0')}:${String(normalized % 60).padStart(2, '0')}`;
+}
+
+function minutesToTimeExt(totalMinutes: number): string {
+  // Permite 25:40 etc. para períodos após meia-noite
+  return `${String(Math.floor(totalMinutes / 60)).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`;
+}
+
+// ─────────────────────────────────────────────
+// Normalização do texto (anti-truques)
+// ─────────────────────────────────────────────
+
 function normalizeText(raw: string): string {
   let text = raw;
 
-  // Remove emojis comuns de picagem
-  text = text.replace(/🕐|📆|🖊️|•|📝|⏰|🕑|🕒|🕓|🕔|🕕|🕖|🕗|🕘|🕙|🕚|🕛|⏱️|📋|✅|❌|🔴|🟢|🟡/g, '');
+  // 1. Remove emojis comuns (com e sem variation selector)
+  text = text.replace(
+    /[🕐🕑🕒🕓🕔🕕🕖🕗🕘🕙🕚🕛⏰📆📅🖊📝📋✅❌🔴🟢🟡•]\uFE0F?/g,
+    ''
+  );
 
-  // Normaliza notação hH: 19h20 → 19:20, 8H30 → 8:30
+  // 2. Datas com pontos: 15.07.2026 → 15/07/2026 (ANTES de converter pontos em horas)
+  text = text.replace(/\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b/g, '$1/$2/$3');
+
+  // 3. Notação hH: 19h20 → 19:20, 8H30 → 8:30
   text = text.replace(/\b(\d{1,2})\s*[hH]\s*(\d{2})\b/g, '$1:$2');
 
-  // Normaliza ; para : em contexto de hora: 19;20 → 19:20
-  text = text.replace(/\b(\d{1,2})\s*;\s*(\d{2})\b/g, '$1:$2');
+  // 4. Ponto-e-vírgula DENTRO de hora (apenas sem espaços, direto entre dígitos):
+  //    "19;20" → "19:20"
+  //    NOTA: "13:05 ; 16:30" NÃO é convertido — o ; com espaços é separador de pausas!
+  text = text.replace(/\b(\d{1,2});(\d{2})\b/g, '$1:$2');
 
-  // Normaliza . para : em contexto de hora: 19.20 → 19:20
-  // Cuidado para não converter datas (15/07/2026)
-  text = text.replace(/\b(\d{1,2})\s*\.\s*(\d{2})\b(?!\s*[/-]\s*\d)/g, '$1:$2');
+  // 5. Ponto DENTRO de hora (apenas sem espaços): "19.20" → "19:20"
+  text = text.replace(/\b(\d{1,2})\.(\d{2})\b/g, '$1:$2');
 
-  // Remove espaços dentro de horas: 19 : 20 → 19:20
+  // 6. Espaços dentro de horas: "19 : 20" → "19:20"
   text = text.replace(/\b(\d{1,2})\s*:\s*(\d{2})\b/g, '$1:$2');
 
   return text.trim();
 }
+
+// ─────────────────────────────────────────────
+// Extração de horas de um texto
+// ─────────────────────────────────────────────
+
+function extractAllTimes(text: string): string[] {
+  const matches = text.match(/\d{1,2}:\d{2}/g) || [];
+  return matches.filter(t => isValidTime(t));
+}
+
+// ─────────────────────────────────────────────
+// Nomes de agente
+// ─────────────────────────────────────────────
 
 export function extractAgentName(threadTitle: string): string {
   const name = threadTitle
@@ -98,21 +141,9 @@ function extractAgentNameFromContent(text: string): string | undefined {
   return raw;
 }
 
-/**
- * Extrai todas as horas HH:MM de uma string, incluindo variantes com ;  .  h  espaços
- * Retorna horas já normalizadas no formato HH:MM
- */
-function extractAllTimes(text: string): string[] {
-  // Já normalizado pelo normalizeText, mas fazemos outra passagem por segurança
-  const normalized = text
-    .replace(/\b(\d{1,2})\s*[hH]\s*(\d{2})\b/g, '$1:$2')
-    .replace(/\b(\d{1,2})\s*;\s*(\d{2})\b/g, '$1:$2')
-    .replace(/\b(\d{1,2})\s*\.\s*(\d{2})\b(?!\s*[/-]\s*\d)/g, '$1:$2')
-    .replace(/\b(\d{1,2})\s*:\s*(\d{2})\b/g, '$1:$2');
-
-  const matches = normalized.match(/\d{1,2}:\d{2}/g) || [];
-  return matches.filter(t => isValidTime(t));
-}
+// ─────────────────────────────────────────────
+// PARSER PRINCIPAL
+// ─────────────────────────────────────────────
 
 export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   const normalizedText = normalizeText(content);
@@ -130,12 +161,7 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   }
 
   const dateStr = dateMatch[1].trim();
-  let dateParts: string[];
-  if (dateStr.includes('/')) {
-    dateParts = dateStr.split('/');
-  } else {
-    dateParts = dateStr.split('-');
-  }
+  const dateParts = dateStr.includes('/') ? dateStr.split('/') : dateStr.split('-');
 
   if (dateParts.length !== 3) {
     alerts.push({ level: 'error', code: 'INVALID_DATE_FORMAT', message: `Formato de data inválido: "${dateStr}".`, field: 'data' });
@@ -143,17 +169,17 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   }
 
   const [day, month, yearRaw] = dateParts;
-  // Handle 2-digit year
   const year = yearRaw.length === 2 ? `20${yearRaw}` : yearRaw;
-  const formattedDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-  const displayDate = `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`;
+  const dayN = parseInt(day, 10);
+  const monthN = parseInt(month, 10);
 
-  // Validate date is real
-  const dateObj = new Date(`${formattedDate}T00:00:00`);
-  if (isNaN(dateObj.getTime())) {
+  if (dayN < 1 || dayN > 31 || monthN < 1 || monthN > 12) {
     alerts.push({ level: 'error', code: 'INVALID_DATE', message: `Data inválida: "${dateStr}".`, field: 'data' });
     return { valid: false, complete: false, alerts, rawAlerts: alerts.map(a => a.message) };
   }
+
+  const formattedDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  const displayDate = `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`;
 
   // ========== 2. EXTRAI HORA DE ENTRADA ==========
   const entryRegex = /(?:Hora\s*(?:De\s*)?Entrada|Entrada)\s*[:]?\s*(\d{1,2}:\d{2})?/i;
@@ -197,16 +223,14 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
     }
   }
 
-  // ========== 4. EXTRAI PAUSAS ==========
-  const breakTimes: string[] = [];
-
-  // Processa linha a linha para evitar capturar conteúdo de outras linhas
-  const lines = normalizedText.split(/\n/);
+  // ========== 4. EXTRAI PAUSAS (linha a linha) ==========
+  const rawBreakTimes: string[] = [];
+  const lines = normalizedText.split(/\r?\n/);
   const pauseContents: string[] = [];
 
   for (const line of lines) {
     const trimmedLine = line.trim();
-    // Ignora linhas que são de Entrada, Saída, Data, Resumo
+    // Ignora linhas de Entrada, Saída, Data, Resumo
     if (/(?:Hora\s*(?:De\s*)?Entrada|Entrada)\s*[:]?\s*\d/i.test(trimmedLine)) continue;
     if (/(?:Hora\s*(?:De\s*)?Sa[íi]da|Sa[íi]da)\s*[:]?\s*/i.test(trimmedLine)) continue;
     if (/Data\s*[:]?\s*\d/i.test(trimmedLine)) continue;
@@ -218,33 +242,54 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
     }
   }
 
-  for (const content of pauseContents) {
-    // Estratégia robusta: extrair TODAS as horas de qualquer formato
-    // Funciona com qualquer separador: - / | espaço , as das e etc.
-    // Ex: "18:30 as 19;20 E DAS 20:10 as 22:15" → [18:30, 19:20, 20:10, 22:15]
-    const allTimes = extractAllTimes(content);
+  for (const pauseContent of pauseContents) {
+    // Extrai TODAS as horas — separadores podem ser qualquer coisa:
+    // "as", "às", "E DAS", "-", ";", "|", "/", espaços, vírgulas…
+    const allTimes = extractAllTimes(pauseContent);
 
     for (const t of allTimes) {
       if (!validateTimeMinutes(t)) {
-        // AVISO, mas aceita a hora (não bloqueia como erro)
+        // AVISO, mas aceita a hora
         alerts.push({ level: 'warning', code: 'BREAK_NOT_ROUND', message: `Pausa ${t} não termina em 0 ou 5.`, field: 'pausa' });
       }
-      breakTimes.push(t);
+      rawBreakTimes.push(t);
     }
   }
 
-  // ========== 4b. LIMPA PAUSAS ==========
-  // Remove break que é igual à entrada ou saída (bug de captura)
-  const cleanedBreaks: string[] = [];
-  for (const bt of breakTimes) {
+  // ========== 5. LIMPA + ORDENA PAUSAS ==========
+  // Remove breaks iguais à entrada ou saída (capturas duplicadas)
+  const dedupedBreaks: string[] = [];
+  for (const bt of rawBreakTimes) {
     if (bt === entryTime) continue;
     if (bt === exitTime) continue;
-    cleanedBreaks.push(bt);
+    dedupedBreaks.push(bt);
   }
-  breakTimes.length = 0;
-  breakTimes.push(...cleanedBreaks);
 
-  // Validação: número de breakTimes deve ser par (início/fim de cada pausa)
+  // Remove duplicados exatos consecutivos (ex: "12:35 - 12:35")
+  const uniqueBreaks = dedupedBreaks.filter((t, i) => i === 0 || t !== dedupedBreaks[i - 1]);
+
+  // ---- ORDENAÇÃO CRONOLÓGICA A PARTIR DA ENTRADA ----
+  // Resolve o pessoal que escreve as pausas fora de ordem.
+  // Converte cada hora para minutos "relativos" à entrada:
+  //   hora >= entrada → fica igual
+  //   hora < entrada  → soma 1440 (é do dia seguinte)
+  // Depois ordena e volta a converter para HH:MM.
+  let breakTimes: string[] = uniqueBreaks;
+  let sortedRelativeBreaks: number[] = [];
+
+  if (entryTime && uniqueBreaks.length > 0) {
+    const entryMin = timeToMinutes(entryTime);
+    sortedRelativeBreaks = uniqueBreaks
+      .map(bt => {
+        let m = timeToMinutes(bt);
+        if (m < entryMin) m += 1440;
+        return m;
+      })
+      .sort((a, b) => a - b);
+    breakTimes = sortedRelativeBreaks.map(m => minutesToTime(m));
+  }
+
+  // Validação: número de pausas deve ser par
   if (breakTimes.length > 0 && breakTimes.length % 2 !== 0) {
     alerts.push({
       level: 'warning',
@@ -254,37 +299,44 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
     });
   }
 
-  // ========== 5. CALCULA TOTAL ==========
+  // ========== 6. CALCULA TOTAL (com sequência ordenada) ==========
   let totalMinutes = 0;
   let totalFormatted = '0h00m';
+  const periods: WorkPeriod[] = [];
 
   if (entryTime && exitTime) {
-    const sequence: number[] = [timeToMinutes(entryTime)];
-    for (const bt of breakTimes) {
-      sequence.push(timeToMinutes(bt));
-    }
-    sequence.push(timeToMinutes(exitTime));
+    const entryMin = timeToMinutes(entryTime);
 
-    // Ajusta para turnos noturnos (cada tempo deve ser >= ao anterior)
-    const adjusted: number[] = [sequence[0]];
-    for (let i = 1; i < sequence.length; i++) {
-      let val = sequence[i];
-      while (val < adjusted[i - 1]) {
-        val += 1440;
+    // Saída: deve ser >= última hora da sequência
+    let exitMin = timeToMinutes(exitTime);
+    const lastBreak = sortedRelativeBreaks[sortedRelativeBreaks.length - 1] ?? entryMin;
+    while (exitMin < lastBreak) exitMin += 1440;
+    // Se a saída ainda for <= entrada (ex: entrada 22:00 saída 22:00), assume +24h
+    if (exitMin <= entryMin) exitMin += 1440;
+
+    // Sequência relativa completa: [entrada, ...pausas ordenadas, saída]
+    const sequence = [entryMin, ...sortedRelativeBreaks, exitMin];
+
+    // Emparelha: [entrada→pausa1], [pausa2→pausa3], ..., [pausaN→saída]
+    for (let i = 0; i + 1 < sequence.length; i += 2) {
+      const start = sequence[i];
+      const end = sequence[i + 1];
+      if (end > start) {
+        totalMinutes += end - start;
+        periods.push({ start: minutesToTimeExt(start), end: minutesToTimeExt(end) });
+      } else if (end === start) {
+        // Período zero (hora repetida) — ignora mas avisa
+        alerts.push({
+          level: 'warning',
+          code: 'ZERO_PERIOD',
+          message: `Período com duração zero detetado em ${minutesToTime(start)}. Verifique horários duplicados.`,
+          field: 'pausa',
+        });
       }
-      adjusted.push(val);
     }
 
-    // Soma períodos de trabalho (pares: [0→1], [2→3], [4→5], ...)
-    for (let i = 0; i < adjusted.length - 1; i += 2) {
-      if (i + 1 < adjusted.length) {
-        totalMinutes += adjusted[i + 1] - adjusted[i];
-      }
-    }
-    totalMinutes = Math.max(0, totalMinutes);
-
-    // Sanity check: mais de 16h de trabalho é suspeito
-    if (totalMinutes > 960) {
+    // Segurança: mais de 18h de trabalho é quase de certeza erro
+    if (totalMinutes > 1080) {
       alerts.push({
         level: 'warning',
         code: 'EXCESSIVE_HOURS',
@@ -293,9 +345,8 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
       });
     }
 
-    const hours = Math.floor(totalMinutes / 60);
-    const mins = totalMinutes % 60;
-    totalFormatted = `${hours}h${mins.toString().padStart(2, '0')}m`;
+    totalMinutes = Math.max(0, totalMinutes);
+    totalFormatted = `${Math.floor(totalMinutes / 60)}h${(totalMinutes % 60).toString().padStart(2, '0')}m`;
   }
 
   const hasErrors = alerts.some(a => a.level === 'error');
@@ -312,6 +363,7 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
     breakTimes: breakTimes.length > 0 ? breakTimes : undefined,
     totalMinutes,
     totalFormatted,
+    periods: periods.length > 0 ? periods : undefined,
     alerts,
     rawAlerts: alerts.map(a => a.message),
     agentName,

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Clock, Users, TrendingUp, Activity, Zap, AlertTriangle, Trash2 } from 'lucide-react';
+import { Clock, Users, TrendingUp, Activity, Zap, Trash2 } from 'lucide-react';
 
 interface DashboardData {
   stats: {
@@ -20,10 +20,39 @@ interface DashboardData {
     exitTime: string | null;
     totalMinutes: number | null;
     totalFormatted: string;
+    breakTimesArr: string[];
   }>;
   chartData: Array<{ day: string; date: string; hours: number }>;
   topEmployees: Array<{ name: string | null; hours: string; minutes: number }>;
   weekRange: string;
+}
+
+function toMin(t: string) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
+function fromMin(m: number) { const nm = ((m % 1440) + 1440) % 1440; return `${String(Math.floor(nm / 60)).padStart(2, '0')}:${String(nm % 60).padStart(2, '0')}`; }
+
+function allTimesExt(entryTime: string, breakTimes: string[], exitTime: string | null): string[] {
+  let prev = toMin(entryTime);
+  const breaks: string[] = [];
+  for (const bt of breakTimes) {
+    let m = toMin(bt);
+    while (m < prev) m += 1440;
+    breaks.push(fromMin(m));
+    prev = m;
+  }
+  let exitF: string | null = null;
+  if (exitTime) { let m = toMin(exitTime); while (m < prev) m += 1440; exitF = fromMin(m); }
+  const cleanBreaks = [...breaks];
+  if (exitF && cleanBreaks[cleanBreaks.length - 1] === exitF) cleanBreaks.pop();
+  const all = [entryTime, ...cleanBreaks, ...(exitF ? [exitF] : [])];
+  return all.filter((t, i) => i === 0 || t !== all[i - 1]);
+}
+
+function timePairs(times: string[]): [string, string][] {
+  const pairs: [string, string][] = [];
+  for (let i = 0; i < times.length; i += 2) {
+    if (i + 1 < times.length) pairs.push([times[i], times[i + 1]]);
+  }
+  return pairs;
 }
 
 export default function DashboardPage() {
@@ -204,35 +233,52 @@ export default function DashboardPage() {
               <thead>
                 <tr className="border-b border-white/5">
                   <th className="text-left py-2 text-[10px] text-gray-500 font-bold uppercase tracking-wider">Funcionário</th>
-                  <th className="text-left py-2 text-[10px] text-gray-500 font-bold uppercase tracking-wider">Entrada</th>
-                  <th className="text-left py-2 text-[10px] text-gray-500 font-bold uppercase tracking-wider">Saída</th>
+                  <th className="text-left py-2 text-[10px] text-gray-500 font-bold uppercase tracking-wider">Períodos de Trabalho</th>
                   <th className="text-left py-2 text-[10px] text-gray-500 font-bold uppercase tracking-wider">Total</th>
                   <th className="text-left py-2 text-[10px] text-gray-500 font-bold uppercase tracking-wider">Estado</th>
                 </tr>
               </thead>
               <tbody>
-                {data.todayActivity.map((entry, i) => (
-                  <tr key={i} className="border-b border-white/5 hover:bg-white/[0.02]">
-                    <td className="py-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-[10px] font-bold">
-                          {entry.employeeName?.charAt(0) || '?'}
+                {data.todayActivity.map((entry, i) => {
+                  const bt = entry.breakTimesArr || [];
+                  const times = allTimesExt(entry.entryTime, bt, entry.exitTime);
+                  const pairs = timePairs(times);
+
+                  return (
+                    <tr key={i} className="border-b border-white/5 hover:bg-white/[0.02]">
+                      <td className="py-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-[10px] font-bold">
+                            {entry.employeeName?.charAt(0) || '?'}
+                          </div>
+                          <span className="text-sm text-gray-300">{entry.employeeName}</span>
                         </div>
-                        <span className="text-sm text-gray-300">{entry.employeeName}</span>
-                      </div>
-                    </td>
-                    <td className="py-3 text-sm font-mono text-green-400">{entry.entryTime}</td>
-                    <td className="py-3 text-sm font-mono text-gray-300">{entry.exitTime || '--:--'}</td>
-                    <td className="py-3 text-sm font-mono text-amber-400">{entry.totalFormatted}</td>
-                    <td className="py-3">
-                      {entry.exitTime ? (
-                        <span className="px-2 py-0.5 rounded-full bg-green-500/10 text-green-400 text-[10px] font-bold border border-green-500/20">COMPLETO</span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 text-[10px] font-bold border border-amber-500/20">EM CURSO</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="py-3">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {pairs.map((p, pi) => (
+                            <span key={pi} className="inline-flex items-center rounded-full bg-blue-500/15 border border-blue-500/35 overflow-hidden">
+                              <span className="px-1.5 py-0.5 text-[11px] font-mono font-bold text-blue-200">{p[0]}</span>
+                              <span className="text-blue-500/50 text-[9px] px-0.5">→</span>
+                              <span className="px-1.5 py-0.5 text-[11px] font-mono font-bold text-blue-200">{p[1]}</span>
+                            </span>
+                          ))}
+                          {pairs.length === 0 && (
+                            <span className="text-sm font-mono text-green-400">{entry.entryTime}</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-3 text-sm font-mono text-amber-400 font-bold">{entry.totalFormatted}</td>
+                      <td className="py-3">
+                        {entry.exitTime ? (
+                          <span className="px-2 py-0.5 rounded-full bg-green-500/10 text-green-400 text-[10px] font-bold border border-green-500/20">COMPLETO</span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 text-[10px] font-bold border border-amber-500/20">EM CURSO</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -246,7 +292,7 @@ export default function DashboardPage() {
           <div className="relative bg-slate-900 border border-white/10 rounded-2xl w-full max-w-md p-6">
             <div className="mb-4">
               <h3 className="text-lg font-bold text-red-400 flex items-center gap-2">
-                <AlertTriangle className="w-5 h-5" /> Limpar Todos os Dados
+                <Trash2 className="w-5 h-5" /> Limpar Todos os Dados
               </h3>
               <p className="text-xs text-gray-500 mt-1">Esta ação é irreversível</p>
             </div>

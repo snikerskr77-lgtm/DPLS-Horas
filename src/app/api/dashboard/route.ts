@@ -54,6 +54,10 @@ export async function GET() {
         entryTime: timeEntries.entryTime,
         exitTime: timeEntries.exitTime,
         totalMinutes: timeEntries.totalMinutes,
+        breakStart: timeEntries.breakStart,
+        breakEnd: timeEntries.breakEnd,
+        breakTimes: timeEntries.breakTimes,
+        notes: timeEntries.notes,
       })
       .from(timeEntries)
       .leftJoin(employees, eq(timeEntries.employeeId, employees.id))
@@ -95,6 +99,20 @@ export async function GET() {
       ? Math.round(((thisWeekMinutes - lastWeekMinutes) / lastWeekMinutes) * 100)
       : 0;
 
+    // Extract break times from entries
+    function getBreakTimesArr(entry: { breakTimes: string | null; notes: string | null; breakStart: string | null; breakEnd: string | null }): string[] {
+      if (entry.breakTimes) {
+        try { const arr = JSON.parse(entry.breakTimes); if (Array.isArray(arr)) return arr; } catch { /* ignore */ }
+      }
+      if (entry.notes && entry.notes.startsWith('__TTMETA__:')) {
+        try {
+          const meta = JSON.parse(entry.notes.slice('__TTMETA__:'.length));
+          if (meta.breakTimes && Array.isArray(meta.breakTimes)) return meta.breakTimes;
+        } catch { /* ignore */ }
+      }
+      return [entry.breakStart, entry.breakEnd].filter(Boolean) as string[];
+    }
+
     return NextResponse.json({
       stats: {
         totalEmployees: employeeCount?.count || 0,
@@ -110,6 +128,7 @@ export async function GET() {
       todayActivity: todayEntries.map(e => ({
         ...e,
         totalFormatted: formatMinutesToHours(e.totalMinutes || 0),
+        breakTimesArr: getBreakTimesArr(e),
       })),
       chartData,
       topEmployees: topEmployees.map(e => ({

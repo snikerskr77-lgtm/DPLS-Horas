@@ -6,7 +6,7 @@ import { parseTimeEntryMessage, extractAgentName } from '@/lib/discord-parser';
 import { getDiscordConfig } from '@/lib/get-discord-config';
 import { getErrorMessage } from '@/lib/db-compat';
 import { buildWorkPeriods, encodeTimeTrackMeta } from '@/lib/utils';
-import { getChannel, getAllChannelMessages, getArchivedThreads, type DiscordThread } from '@/lib/discord-api';
+import { getChannel, getAllChannelMessages, getArchivedThreads, type DiscordThread, type DiscordMessage } from '@/lib/discord-api';
 
 interface SyncStats {
   threadsProcessed: number;
@@ -106,13 +106,72 @@ async function processForumChannel(token: string, channelId: string, stats: Sync
   }
 }
 
+// ─────────────────────────────────────────────
+// AGRUPAMENTO DE MENSAGENS EM BLOCOS DE REGISTO
+//
+// O Discord (ou o pessoal) pode publicar a picagem de várias formas:
+//   A) Tudo numa única mensagem (Data + Entrada + Pausa + Saída)
+//   B) Cada campo na sua própria mensagem
+//   C) A data numa mensagem e o resto noutra
+//
+// Regra: cada linha "Data:" num bloco que JÁ tem data → fecha bloco, começa um novo.
+// Mensagens sem data juntam-se ao bloco anterior.
+// Assim, o parser recebe sempre o registo COMPLETO — nunca fragmentos.
+// ─────────────────────────────────────────────
+
+const DATE_LINE_REGEX = /Data\s*[:]?\s*\d{1,2}[./-]\d{1,2}[./-]\d{2,4}/i;
+
+function sortChronological(messages: DiscordMessage[]): DiscordMessage[] {
+  return [...messages].sort((a, b) => {
+    if (a.timestamp !== b.timestamp) return a.timestamp.localeCompare(b.timestamp);
+    return a.id < b.id ? -1 : 1;
+  });
+}
+
+function splitIntoBlocks(messages: DiscordMessage[]): string[] {
+  const blocks: string[] = [];
+  let current: string[] = [];
+  let currentHasDate = false;
+
+  for (const msg of messages) {
+    const content = (msg.content || '').trim();
+    if (!content) continue;
+    const hasDate = DATE_LINE_REGEX.test(content);
+
+    if (hasDate && currentHasDate) {
+      // Bloco anterior já tinha data → é um novo registo
+      blocks.push(current.join('\n'));
+      current = [content];
+      currentHasDate = true;
+    } else {
+      current.push(content);
+      if (hasDate) currentHasDate = true;
+    }
+  }
+  if (current.length > 0) blocks.push(current.join('\n'));
+  return blocks;
+}
+
 async function processTextChannel(token: string, channelId: string, stats: SyncStats) {
   try {
     const messages = await getAllChannelMessages(token, channelId, 500);
-    for (const message of messages) {
-      if (message.author.id === 'bot') continue;
-      const agentName = message.author.global_name || message.author.username;
-      await processMessage(message.content, agentName, stats);
+    stats.messagesProcessed += messages.length;
+
+    // Agrupa por autor para não misturar registos de agentes diferentes
+    const byAuthor = new Map<string, DiscordMessage[]>();
+    for (const m of messages) {
+      const key = m.author.id;
+      if (!byAuthor.has(key)) byAuthor.set(key, []);
+      byAuthor.get(key)!.push(m);
+    }
+
+    for (const msgs of byAuthor.values()) {
+      const sorted = sortChronological(msgs);
+      const agentName = sorted[0].author.global_name || sorted[0].author.username;
+      const blocks = splitIntoBlocks(sorted);
+      for (const block of blocks) {
+        await processMessage(block, agentName, stats);
+      }
     }
   } catch (error) {
     stats.errors.push(`Erro ao processar canal de texto: ${error}`);
@@ -124,8 +183,11 @@ async function processThread(token: string, thread: DiscordThread, stats: SyncSt
   stats.threadsProcessed++;
   try {
     const messages = await getAllChannelMessages(token, thread.id, 200);
-    for (const message of messages) {
-      await processMessage(message.content, agentName, stats);
+    stats.messagesProcessed += messages.length;
+    const sorted = sortChronological(messages);
+    const blocks = splitIntoBlocks(sorted);
+    for (const block of blocks) {
+      await processMessage(block, agentName, stats);
     }
   } catch (error) {
     stats.errors.push(`Erro na thread "${thread.name}": ${error}`);
@@ -133,7 +195,6 @@ async function processThread(token: string, thread: DiscordThread, stats: SyncSt
 }
 
 async function processMessage(content: string, agentName: string, stats: SyncStats) {
-  stats.messagesProcessed++;
   const parsed = parseTimeEntryMessage(content);
   const resolvedAgentName = parsed.agentName || agentName;
 
@@ -160,10 +221,9 @@ async function processMessage(content: string, agentName: string, stats: SyncSta
       .from(timeEntries)
       .where(and(eq(timeEntries.employeeId, employee.id), eq(timeEntries.date, parsed.date)));
 
-    // Limpa breakTimes: remove horas iguais à saída (bug do parser)
+    // Limpa breakTimes: remove última se igual à saída (fim de pausa = fim do turno)
     let cleanBreaks = (parsed.breakTimes || []).filter(Boolean);
     if (parsed.exitTime && cleanBreaks.length > 0) {
-      // Remove último break se igual à saída
       if (cleanBreaks[cleanBreaks.length - 1] === parsed.exitTime) {
         cleanBreaks = cleanBreaks.slice(0, -1);
       }
