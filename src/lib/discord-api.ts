@@ -1,6 +1,11 @@
 // Discord REST API client
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
 
+interface DiscordReaction {
+  emoji: { id: string | null; name: string };
+  count: number;
+}
+
 interface DiscordMessage {
   id: string;
   content: string;
@@ -10,6 +15,7 @@ interface DiscordMessage {
     global_name?: string;
   };
   timestamp: string;
+  reactions?: DiscordReaction[];
 }
 
 interface DiscordThread {
@@ -90,4 +96,15 @@ export async function getAllChannelMessages(
   return allMessages;
 }
 
-export type { DiscordMessage, DiscordThread, DiscordChannel };
+/**
+ * Verifica se uma mensagem tem reação ❌ (X)
+ */
+export function hasRejectReaction(message: DiscordMessage): boolean {
+  if (!message.reactions) return false;
+  return message.reactions.some(r =>
+    r.emoji.name === '❌' || r.emoji.name === '✖️' || r.emoji.name === '✖' ||
+    r.emoji.name === '🚫' || r.emoji.name === '⛔'
+  );
+}
+
+export type { DiscordMessage, DiscordThread, DiscordChannel, DiscordReaction };

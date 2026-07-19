@@ -5,7 +5,8 @@ import { FileSpreadsheet, ChevronLeft, ChevronRight, AlertTriangle, Download, Co
 
 interface DayHeader { date: string; dayOfWeek: number; dayNum: number; monthDay: string; }
 interface DailyEntry { entryTime: string; exitTime: string | null; breakTimes: string[]; periods: string[]; totalMinutes: number; totalFormatted: string; hasAlerts: boolean; alertLevel: 'ok' | 'warning' | 'error'; }
-interface EmployeeRow { employeeId: string; employeeName: string; department: string | null; position: string | null; dailyData: Record<string, DailyEntry>; totalWeekMinutes: number; totalWeekFormatted: string; daysWorked: number; }
+interface AbsenceInfo { type: string; reason: string | null; }
+interface EmployeeRow { employeeId: string; employeeName: string; department: string | null; position: string | null; dailyData: Record<string, DailyEntry>; totalWeekMinutes: number; totalWeekFormatted: string; daysWorked: number; absences?: Record<string, AbsenceInfo>; }
 interface FolhaData { weekStart: string; weekEnd: string; weekRange: string; weekRangeShort: string; prevWeekDate: string; nextWeekDate: string; dayHeaders: DayHeader[]; employees: EmployeeRow[]; dailyTotals: Record<string, number>; grandTotalMinutes: number; grandTotalFormatted: string; totalEmployees: number; }
 
 const dowFull = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
@@ -200,7 +201,23 @@ export default function FolhaDeHorasPage() {
                     {data.dayHeaders.map(dh => {
                       const entry = emp.dailyData[dh.date];
                       const we = dh.dayOfWeek === 0 || dh.dayOfWeek === 6;
-                      if (!entry) return <td key={dh.date} className={`border-b border-r border-white/5 px-2 py-3 text-center ${we ? 'bg-red-950/10' : ''}`}>{we ? <span className="text-red-900/30 text-xs">—</span> : <span className="text-gray-800 text-xs">·</span>}</td>;
+                      const absence = emp.absences?.[dh.date];
+
+                      if (!entry) {
+                        if (absence) {
+                          return (
+                            <td key={dh.date} className={`border-b border-r border-white/5 px-2 py-3 text-center ${we ? 'bg-red-950/10' : ''}`}>
+                              <div className="flex flex-col items-center gap-0.5">
+                                <span className="px-2 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold uppercase">
+                                  ✓ Justificado
+                                </span>
+                                {absence.reason && <span className="text-[8px] text-gray-500 truncate max-w-[140px]" title={absence.reason}>{absence.reason}</span>}
+                              </div>
+                            </td>
+                          );
+                        }
+                        return <td key={dh.date} className={`border-b border-r border-white/5 px-2 py-3 text-center ${we ? 'bg-red-950/10' : ''}`}>{we ? <span className="text-red-900/30 text-xs">—</span> : <span className="text-gray-800 text-xs">·</span>}</td>;
+                      }
 
                       const times = allTimesExt(entry.entryTime, entry.breakTimes, entry.exitTime);
                       const pairs = timePairs(times);
@@ -218,7 +235,14 @@ export default function FolhaDeHorasPage() {
                             </div>
                             <CpBtn text={copyAll} title="Copiar tudo" />
                           </div>
-                          {entry.hasAlerts && <AlertTriangle className={`w-3 h-3 mt-1 ${entry.alertLevel === 'error' ? 'text-red-400' : 'text-amber-400'}`} />}
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            {entry.hasAlerts && <AlertTriangle className={`w-3 h-3 ${entry.alertLevel === 'error' ? 'text-red-400' : 'text-amber-400'}`} />}
+                            {absence && (
+                              <span className="inline-flex items-center gap-0.5 text-[9px] text-emerald-400 font-bold" title={absence.reason ? `Ausência: ${absence.reason}` : 'Ausência justificada'}>
+                                <Check className="w-3 h-3" /> Justif.
+                              </span>
+                            )}
+                          </div>
                         </td>
                       );
                     })}

@@ -6,7 +6,8 @@ import { FileChartColumnIncreasing, ChevronLeft, ChevronRight, Search, AlertTria
 interface AlertItem { level: string; code: string; message: string; field?: string; }
 interface DayHeader { date: string; dayOfWeek: number; dowLabel: string; dayMonth: string; isWeekend: boolean; }
 interface DailyEntry { totalMinutes: number; entryTime: string; exitTime: string | null; breakStart: string | null; breakEnd: string | null; breakTimes: string[]; periods: string[]; alerts: string | null; }
-interface ReportRow { employeeId: string; employeeName: string; weekRange: string; daysWorked: number; missingDays: number; missingDaysList: string[]; totalMinutes: number; totalFormatted: string; hasUnjustifiedAbsence: boolean; hasAlerts: boolean; dailyEntries: Record<string, DailyEntry>; }
+interface AbsenceInfo { type: string; reason: string | null; }
+interface ReportRow { employeeId: string; employeeName: string; weekRange: string; daysWorked: number; missingDays: number; missingDaysList: string[]; totalMinutes: number; totalFormatted: string; hasUnjustifiedAbsence: boolean; hasAlerts: boolean; dailyEntries: Record<string, DailyEntry>; absences?: Record<string, AbsenceInfo>; }
 interface ReportData { weekStart: string; weekEnd: string; weekRange: string; weekDays: string[]; dayHeaders: DayHeader[]; prevWeekDate: string; nextWeekDate: string; report: ReportRow[]; }
 
 const dowFull = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
@@ -273,7 +274,28 @@ export default function ReportsPage() {
                     </td>
                     {data.dayHeaders.map(dh => {
                       const entry = row.dailyEntries[dh.date];
-                      if (!entry) return <td key={dh.date} className={`text-center px-2 py-3 ${dh.isWeekend ? 'bg-red-900/5' : ''}`}>{dh.isWeekend ? <span className="text-red-900/30">—</span> : <span className="text-gray-700">·</span>}</td>;
+                      const absence = row.absences?.[dh.date];
+
+                      if (!entry) {
+                        // Sem registo de ponto — verificar ausência justificada
+                        if (absence) {
+                          return (
+                            <td key={dh.date} className={`text-center px-2 py-3 ${dh.isWeekend ? 'bg-red-900/5' : ''}`}>
+                              <div className="flex flex-col items-center gap-0.5">
+                                <span className="px-2 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold uppercase tracking-wider">
+                                  ✓ Justificado
+                                </span>
+                                {absence.reason && (
+                                  <span className="text-[9px] text-gray-500 truncate max-w-[180px]" title={absence.reason}>
+                                    {absence.reason}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                          );
+                        }
+                        return <td key={dh.date} className={`text-center px-2 py-3 ${dh.isWeekend ? 'bg-red-900/5' : ''}`}>{dh.isWeekend ? <span className="text-red-900/30">—</span> : <span className="text-gray-700">·</span>}</td>;
+                      }
 
                       const times = allTimesExt(entry.entryTime, entry.breakTimes, entry.exitTime);
                       const pairs = timePairs(times);
@@ -288,7 +310,14 @@ export default function ReportsPage() {
                             <div className={`ml-auto px-2 py-1 rounded-full border text-[11px] font-mono font-bold shrink-0 ${totColor}`}>{fmtHM(entry.totalMinutes)}</div>
                             <CpBtn text={copyAll} title="Copiar tudo" />
                           </div>
-                          <DayAlertBadge alerts={alerts} dayMonth={dh.dayMonth} />
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <DayAlertBadge alerts={alerts} dayMonth={dh.dayMonth} />
+                            {absence && (
+                              <span className="inline-flex items-center gap-0.5 text-[9px] text-emerald-400 font-bold" title={absence.reason ? `Ausência: ${absence.reason}` : 'Ausência justificada'}>
+                                <CheckCircle className="w-3 h-3" /> Justif.
+                              </span>
+                            )}
+                          </div>
                         </td>
                       );
                     })}

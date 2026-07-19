@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
-import { timeEntries, employees } from '@/db/schema';
+import { timeEntries, employees, absences } from '@/db/schema';
 import { eq, and, gte, lte } from 'drizzle-orm';
 import { startOfWeek, endOfWeek, format, eachDayOfInterval, parseISO, addWeeks, subWeeks } from 'date-fns';
 import { formatMinutesToHours, decodeTimeTrackMeta, buildWorkPeriods, nowInPortugal } from '@/lib/utils';
@@ -130,8 +130,26 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    // Filter: only employees with at least 1 entry this week
-    const activeRows = employeeRows.filter(r => r.daysWorked > 0);
+    // ── AUSÊNCIAS JUSTIFICADAS ──
+    const weekAbsences = await db
+      .select({ employeeId: absences.employeeId, date: absences.date, type: absences.type, reason: absences.reason })
+      .from(absences)
+      .where(and(gte(absences.date, startStr), lte(absences.date, endStr)));
+
+    const absenceMap: Record<string, Record<string, { type: string; reason: string | null }>> = {};
+    for (const a of weekAbsences) {
+      if (!absenceMap[a.employeeId]) absenceMap[a.employeeId] = {};
+      absenceMap[a.employeeId][a.date] = { type: a.type, reason: a.reason };
+    }
+
+    // Add absences to each employee row
+    const enrichedRows = employeeRows.map(r => ({
+      ...r,
+      absences: absenceMap[r.employeeId] || {},
+    }));
+
+    // Filter: employees with at least 1 entry OR 1 absence this week
+    const activeRows = enrichedRows.filter(r => r.daysWorked > 0 || Object.keys(r.absences).length > 0);
 
     // Grand totals per day
     const dailyTotals: Record<string, number> = {};

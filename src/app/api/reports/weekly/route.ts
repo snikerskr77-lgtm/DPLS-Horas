@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
-import { timeEntries, employees } from '@/db/schema';
+import { timeEntries, employees, absences } from '@/db/schema';
 import { eq, and, gte, lte, ilike } from 'drizzle-orm';
 import { startOfWeek, endOfWeek, format, eachDayOfInterval, parseISO } from 'date-fns';
 import { buildWorkPeriods, decodeTimeTrackMeta, formatMinutesToHours, todayInPortugal } from '@/lib/utils';
@@ -91,10 +91,37 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // ── AUSÊNCIAS JUSTIFICADAS ──
+    const weekAbsences = await db
+      .select({
+        employeeId: absences.employeeId,
+        employeeName: employees.name,
+        date: absences.date,
+        type: absences.type,
+        reason: absences.reason,
+      })
+      .from(absences)
+      .leftJoin(employees, eq(absences.employeeId, employees.id))
+      .where(and(gte(absences.date, startStr), lte(absences.date, endStr)));
+
+    // Mapa: employeeId → { date → { type, reason } }
+    const absenceMap: Record<string, Record<string, { type: string; reason: string | null }>> = {};
+    for (const a of weekAbsences) {
+      if (!a.employeeId) continue;
+      if (!absenceMap[a.employeeId]) absenceMap[a.employeeId] = {};
+      absenceMap[a.employeeId][a.date] = { type: a.type, reason: a.reason };
+
+      // Garante que o funcionário aparece no report mesmo sem time entries
+      if (!employeeEntries[a.employeeId] && a.employeeName) {
+        employeeEntries[a.employeeId] = { name: a.employeeName, entries: {} };
+      }
+    }
+
     const report = Object.entries(employeeEntries).map(([employeeId, data]) => {
       const daysWorked = Object.keys(data.entries).length;
       const totalMinutes = Object.values(data.entries).reduce((sum, e) => sum + e.totalMinutes, 0);
-      const missingDays = weekDayStrings.filter(day => !data.entries[day]);
+      const empAbsences = absenceMap[employeeId] || {};
+      const missingDays = weekDayStrings.filter(day => !data.entries[day] && !empAbsences[day]);
       const hasAlerts = Object.values(data.entries).some(e => e.alerts);
 
       return {
@@ -109,6 +136,7 @@ export async function GET(request: NextRequest) {
         hasUnjustifiedAbsence: missingDays.length >= 3,
         hasAlerts,
         dailyEntries: data.entries,
+        absences: empAbsences,
       };
     });
 

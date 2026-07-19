@@ -44,7 +44,13 @@ export default function DiscordPage() {
   const [showSettings, setShowSettings] = useState(false);
   const [token, setToken] = useState('');
   const [channelId, setChannelId] = useState('');
+  const [absenceChannelId, setAbsenceChannelId] = useState('');
   const [saving, setSaving] = useState(false);
+
+  // Absences
+  const [absenceStatus, setAbsenceStatus] = useState<{ configured: boolean; channelId: string | null } | null>(null);
+  const [syncingAbsences, setSyncingAbsences] = useState(false);
+  const [absenceResult, setAbsenceResult] = useState<{ success: boolean; message: string; stats?: Record<string, number> } | null>(null);
 
   // Parser tester
   const [testMsg, setTestMsg] = useState('');
@@ -54,8 +60,12 @@ export default function DiscordPage() {
   const fetchStatus = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/discord/sync');
-      setStatus(await res.json());
+      const [syncRes, absRes] = await Promise.all([
+        fetch('/api/discord/sync'),
+        fetch('/api/discord/sync-absences'),
+      ]);
+      setStatus(await syncRes.json());
+      setAbsenceStatus(await absRes.json());
     } catch { /* ignore */ }
     setLoading(false);
   }, []);
@@ -78,10 +88,22 @@ export default function DiscordPage() {
     try {
       if (token) await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'discord_bot_token', value: token }) });
       if (channelId) await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'discord_channel_id', value: channelId }) });
+      if (absenceChannelId) await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'discord_absence_channel_id', value: absenceChannelId }) });
       await fetchStatus();
-      setShowSettings(false); setToken(''); setChannelId('');
+      setShowSettings(false); setToken(''); setChannelId(''); setAbsenceChannelId('');
     } catch { /* ignore */ }
     setSaving(false);
+  };
+
+  const handleSyncAbsences = async () => {
+    setSyncingAbsences(true); setAbsenceResult(null);
+    try {
+      const res = await fetch('/api/discord/sync-absences', { method: 'POST' });
+      setAbsenceResult(await res.json());
+    } catch (e) {
+      setAbsenceResult({ success: false, message: e instanceof Error ? e.message : 'Erro desconhecido' });
+    }
+    setSyncingAbsences(false);
   };
 
   const handleTest = async () => {
@@ -122,7 +144,7 @@ export default function DiscordPage() {
       </div>
 
       {/* Status Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <div className="glass-card rounded-2xl p-5">
           <div className="flex items-center gap-3 mb-2">
             {status?.hasToken ? <CheckCircle className="w-5 h-5 text-green-400" /> : <XCircle className="w-5 h-5 text-red-400" />}
@@ -137,6 +159,41 @@ export default function DiscordPage() {
           </div>
           <p className="text-xs text-gray-500">{status?.channelId ? `ID: ${status.channelId}` : 'Canal não configurado'}</p>
         </div>
+        <div className="glass-card rounded-2xl p-5">
+          <div className="flex items-center gap-3 mb-2">
+            {absenceStatus?.configured ? <CheckCircle className="w-5 h-5 text-green-400" /> : <XCircle className="w-5 h-5 text-red-400" />}
+            <span className="text-sm font-bold">Canal Ausências</span>
+          </div>
+          <p className="text-xs text-gray-500">{absenceStatus?.channelId ? `ID: ${absenceStatus.channelId}` : 'Não configurado'}</p>
+        </div>
+      </div>
+
+      {/* Absence Sync */}
+      <div className="glass-card rounded-2xl p-5 mb-6 border border-emerald-500/20">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-bold text-emerald-400 flex items-center gap-2">📋 Ausências Justificadas</h3>
+            <p className="text-xs text-gray-500 mt-0.5">Sincroniza do canal de ausências · Postagens com reação ❌ são ignoradas</p>
+          </div>
+          <button onClick={handleSyncAbsences} disabled={syncingAbsences || !absenceStatus?.configured} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-emerald-500 transition-all flex items-center gap-2 disabled:opacity-30 shrink-0">
+            <RefreshCw className={`w-4 h-4 ${syncingAbsences ? 'animate-spin' : ''}`} /> {syncingAbsences ? 'A sincronizar...' : 'Sincronizar Ausências'}
+          </button>
+        </div>
+        {absenceResult && (
+          <div className={`mt-4 p-3 rounded-lg border ${absenceResult.success ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-red-500/10 border-red-500/30 text-red-300'}`}>
+            <p className="text-sm">{absenceResult.message}</p>
+            {absenceResult.stats && (
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mt-3">
+                {Object.entries(absenceResult.stats).filter(([k]) => k !== 'errors').map(([k, v]) => (
+                  <div key={k} className="bg-white/5 rounded-lg p-2 text-center">
+                    <p className="text-lg font-bold text-white">{v}</p>
+                    <p className="text-[9px] text-gray-500 uppercase">{k}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Settings Form */}
@@ -149,10 +206,15 @@ export default function DiscordPage() {
               <input type="password" value={token} onChange={e => setToken(e.target.value)} placeholder="Cole o token do bot aqui..." className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-blue-500/50 font-mono placeholder:text-gray-700" />
             </div>
             <div>
-              <label className="text-xs text-gray-400 block mb-1">ID do Canal</label>
+              <label className="text-xs text-gray-400 block mb-1">ID do Canal (Picagem de Ponto)</label>
               <input value={channelId} onChange={e => setChannelId(e.target.value)} placeholder="Ex: 1234567890123456789" className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-blue-500/50 font-mono placeholder:text-gray-700" />
             </div>
-            <button onClick={handleSaveSettings} disabled={saving || (!token && !channelId)} className="px-4 py-2 rounded-lg bg-green-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-green-500 transition-all flex items-center gap-2 disabled:opacity-30">
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">ID do Canal (Ausências)</label>
+              <input value={absenceChannelId} onChange={e => setAbsenceChannelId(e.target.value)} placeholder="Ex: 1528404074418929704" className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-blue-500/50 font-mono placeholder:text-gray-700" />
+              <p className="text-[10px] text-gray-600 mt-1">Postagens com reação ❌ são ignoradas (não justificadas)</p>
+            </div>
+            <button onClick={handleSaveSettings} disabled={saving || (!token && !channelId && !absenceChannelId)} className="px-4 py-2 rounded-lg bg-green-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-green-500 transition-all flex items-center gap-2 disabled:opacity-30">
               <Save className="w-4 h-4" /> {saving ? 'A guardar...' : 'Guardar'}
             </button>
           </div>
