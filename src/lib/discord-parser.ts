@@ -51,13 +51,40 @@ function validateTimeMinutes(timeStr: string): boolean {
   }
 }
 
+/**
+ * Verifica se uma string é uma hora válida.
+ * Aceita 0:00–23:59 (formato normal) E 24:00–30:59 (o pessoal usa 24:20 = 00:20 do dia seguinte).
+ */
 function isValidTime(timeStr: string): boolean {
   if (!timeStr) return false;
   const match = timeStr.match(/^(\d{1,2}):(\d{2})$/);
   if (!match) return false;
   const hours = parseInt(match[1], 10);
   const mins = parseInt(match[2], 10);
-  return hours >= 0 && hours <= 23 && mins >= 0 && mins <= 59;
+  // Aceita 0–30 horas (até 30:59 para cobrir turnos malucos)
+  return hours >= 0 && hours <= 30 && mins >= 0 && mins <= 59;
+}
+
+/**
+ * Converte horas "24+" para o formato 0-23 real.
+ * Ex: 24:20 → 00:20,  25:30 → 01:30,  28:00 → 04:00
+ * Horas normais (0-23) passam inalteradas.
+ */
+function normalize24PlusTime(timeStr: string): string {
+  const [h, m] = timeStr.split(':').map(Number);
+  if (h >= 24) {
+    const realH = h - 24;
+    return `${String(realH).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  }
+  return timeStr;
+}
+
+/**
+ * Indica se a hora original era >= 24 (=dia seguinte explícito).
+ */
+function is24PlusTime(timeStr: string): boolean {
+  const h = parseInt(timeStr.split(':')[0], 10);
+  return h >= 24;
 }
 
 function timeToMinutes(time: string): number {
@@ -186,26 +213,35 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   const entryMatch = normalizedText.match(entryRegex);
 
   let entryTime: string | undefined;
+  let entryWas24Plus = false;
 
   if (!entryMatch) {
     alerts.push({ level: 'error', code: 'NO_ENTRY', message: 'Campo "Hora De Entrada" não encontrado.', field: 'entrada' });
   } else if (!entryMatch[1]) {
     alerts.push({ level: 'error', code: 'EMPTY_ENTRY', message: 'Hora de Entrada está vazia.', field: 'entrada' });
   } else {
-    entryTime = entryMatch[1].trim();
-    if (!isValidTime(entryTime)) {
-      alerts.push({ level: 'error', code: 'INVALID_ENTRY_TIME', message: `Hora de Entrada inválida: "${entryTime}".`, field: 'entrada' });
-      entryTime = undefined;
-    } else if (!validateTimeMinutes(entryTime)) {
-      alerts.push({ level: 'warning', code: 'ENTRY_NOT_ROUND', message: `Entrada ${entryTime} não termina em 0 ou 5.`, field: 'entrada' });
+    const rawEntry = entryMatch[1].trim();
+    if (!isValidTime(rawEntry)) {
+      alerts.push({ level: 'error', code: 'INVALID_ENTRY_TIME', message: `Hora de Entrada inválida: "${rawEntry}".`, field: 'entrada' });
+    } else {
+      entryWas24Plus = is24PlusTime(rawEntry);
+      entryTime = normalize24PlusTime(rawEntry);
+      if (entryWas24Plus) {
+        alerts.push({ level: 'warning', code: 'ENTRY_24PLUS', message: `Entrada "${rawEntry}" convertida para ${entryTime} (dia seguinte).`, field: 'entrada' });
+      }
+      if (!validateTimeMinutes(entryTime)) {
+        alerts.push({ level: 'warning', code: 'ENTRY_NOT_ROUND', message: `Entrada ${entryTime} não termina em 0 ou 5.`, field: 'entrada' });
+      }
     }
   }
 
   // ========== 3. EXTRAI HORA DE SAÍDA ==========
+  // Regex aceita 1-2 dígitos de hora (captura 24:20, 25:30, etc.)
   const exitRegex = /(?:Hora\s*(?:De\s*)?Sa[íi]da|Sa[íi]da)\s*[:]?\s*(\d{1,2}:\d{2}|xx:xx)?/i;
   const exitMatch = normalizedText.match(exitRegex);
 
   let exitTime: string | undefined;
+  let exitWas24Plus = false;
 
   if (!exitMatch) {
     alerts.push({ level: 'error', code: 'NO_EXIT', message: 'Campo "Hora De Saída" não encontrado.', field: 'saida' });
@@ -214,12 +250,18 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   } else if (exitMatch[1].trim().toLowerCase() === 'xx:xx') {
     alerts.push({ level: 'error', code: 'PLACEHOLDER_EXIT', message: 'Hora de Saída contém "xx:xx".', field: 'saida' });
   } else {
-    exitTime = exitMatch[1].trim();
-    if (!isValidTime(exitTime)) {
-      alerts.push({ level: 'error', code: 'INVALID_EXIT_TIME', message: `Hora de Saída inválida: "${exitTime}".`, field: 'saida' });
-      exitTime = undefined;
-    } else if (!validateTimeMinutes(exitTime)) {
-      alerts.push({ level: 'warning', code: 'EXIT_NOT_ROUND', message: `Saída ${exitTime} não termina em 0 ou 5.`, field: 'saida' });
+    const rawExit = exitMatch[1].trim();
+    if (!isValidTime(rawExit)) {
+      alerts.push({ level: 'error', code: 'INVALID_EXIT_TIME', message: `Hora de Saída inválida: "${rawExit}".`, field: 'saida' });
+    } else {
+      exitWas24Plus = is24PlusTime(rawExit);
+      exitTime = normalize24PlusTime(rawExit);
+      if (exitWas24Plus) {
+        alerts.push({ level: 'warning', code: 'EXIT_24PLUS', message: `Saída "${rawExit}" convertida para ${exitTime} (dia seguinte).`, field: 'saida' });
+      }
+      if (!validateTimeMinutes(exitTime)) {
+        alerts.push({ level: 'warning', code: 'EXIT_NOT_ROUND', message: `Saída ${exitTime} não termina em 0 ou 5.`, field: 'saida' });
+      }
     }
   }
 
@@ -247,7 +289,12 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
     // "as", "às", "E DAS", "-", ";", "|", "/", espaços, vírgulas…
     const allTimes = extractAllTimes(pauseContent);
 
-    for (const t of allTimes) {
+    for (const rawT of allTimes) {
+      // Normaliza horas 24+ (ex: 25:30 → 01:30) — o pessoal usa para "dia seguinte"
+      const t = normalize24PlusTime(rawT);
+      if (is24PlusTime(rawT)) {
+        alerts.push({ level: 'warning', code: 'BREAK_24PLUS', message: `Pausa "${rawT}" convertida para ${t}.`, field: 'pausa' });
+      }
       if (!validateTimeMinutes(t)) {
         // AVISO, mas aceita a hora
         alerts.push({ level: 'warning', code: 'BREAK_NOT_ROUND', message: `Pausa ${t} não termina em 0 ou 5.`, field: 'pausa' });
@@ -307,8 +354,13 @@ export function parseTimeEntryMessage(content: string): ParsedTimeEntry {
   if (entryTime && exitTime) {
     const entryMin = timeToMinutes(entryTime);
 
-    // Saída: deve ser >= última hora da sequência
-    let exitMin = timeToMinutes(exitTime);
+    // Saída: se era 24+ (ex: "24:20"), usa os minutos originais (24*60+20=1460)
+    // para que fique inequivocamente DEPOIS da entrada.
+    // Caso contrário, ajusta como turno noturno normal.
+    let exitMin = exitWas24Plus
+      ? timeToMinutes(exitMatch![1].trim())   // 24:20 = 1460 min
+      : timeToMinutes(exitTime);              // 00:20 = 20 min
+
     const lastBreak = sortedRelativeBreaks[sortedRelativeBreaks.length - 1] ?? entryMin;
     while (exitMin < lastBreak) exitMin += 1440;
     // Se a saída ainda for <= entrada (ex: entrada 22:00 saída 22:00), assume +24h
