@@ -17,6 +17,7 @@ export async function GET(request: NextRequest) {
     const startStr = format(weekStart, 'yyyy-MM-dd');
     const endStr = format(weekEnd, 'yyyy-MM-dd');
 
+    // Buscar empregados filtrados pelo nome (se houver pesquisa)
     const allEmployees = await db
       .select()
       .from(employees)
@@ -26,6 +27,11 @@ export async function GET(request: NextRequest) {
           : eq(employees.isActive, true)
       );
 
+    // IDs filtrados para restringir tudo o resto
+    const filteredIds = new Set(allEmployees.map(e => e.id));
+
+    // Buscar entries SÓ dos empregados filtrados
+    const conditions = [gte(timeEntries.date, startStr), lte(timeEntries.date, endStr)];
     const entries = await db
       .select({
         employeeId: timeEntries.employeeId,
@@ -41,15 +47,7 @@ export async function GET(request: NextRequest) {
       })
       .from(timeEntries)
       .leftJoin(employees, eq(timeEntries.employeeId, employees.id))
-      .where(
-        agentQuery
-          ? and(
-              gte(timeEntries.date, startStr),
-              lte(timeEntries.date, endStr),
-              ilike(employees.name, `%${agentQuery}%`)
-            )
-          : and(gte(timeEntries.date, startStr), lte(timeEntries.date, endStr))
-      );
+      .where(and(...conditions));
 
     const weekDays = eachDayOfInterval({ start: weekStart, end: weekEnd });
     const weekDayStrings = weekDays.map(d => format(d, 'yyyy-MM-dd'));
@@ -68,12 +66,14 @@ export async function GET(request: NextRequest) {
       }>;
     }> = {};
 
+    // Inicializar SÓ os empregados filtrados
     for (const emp of allEmployees) {
       employeeEntries[emp.id] = { name: emp.name, entries: {} };
     }
 
+    // Preencher entries (só dos filtrados)
     for (const entry of entries) {
-      if (entry.employeeId && employeeEntries[entry.employeeId]) {
+      if (entry.employeeId && filteredIds.has(entry.employeeId) && employeeEntries[entry.employeeId]) {
         const meta = decodeTimeTrackMeta(entry.notes);
         const breakTimes = meta?.breakTimes || [entry.breakStart, entry.breakEnd].filter(Boolean) as string[];
         const periods = meta?.periods || buildWorkPeriods(entry.entryTime, entry.exitTime, breakTimes);
@@ -91,7 +91,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // ── AUSÊNCIAS JUSTIFICADAS ──
+    // ── AUSÊNCIAS JUSTIFICADAS (também filtradas) ──
     const weekAbsences = await db
       .select({
         employeeId: absences.employeeId,
@@ -104,10 +104,12 @@ export async function GET(request: NextRequest) {
       .leftJoin(employees, eq(absences.employeeId, employees.id))
       .where(and(gte(absences.date, startStr), lte(absences.date, endStr)));
 
-    // Mapa: employeeId → { date → { type, reason } }
     const absenceMap: Record<string, Record<string, { type: string; reason: string | null }>> = {};
     for (const a of weekAbsences) {
       if (!a.employeeId) continue;
+      // Só incluir se o empregado passa no filtro
+      if (agentQuery && !filteredIds.has(a.employeeId)) continue;
+
       if (!absenceMap[a.employeeId]) absenceMap[a.employeeId] = {};
       absenceMap[a.employeeId][a.date] = { type: a.type, reason: a.reason };
 
@@ -117,30 +119,34 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const report = Object.entries(employeeEntries).map(([employeeId, data]) => {
-      const daysWorked = Object.keys(data.entries).length;
-      const totalMinutes = Object.values(data.entries).reduce((sum, e) => sum + e.totalMinutes, 0);
-      const empAbsences = absenceMap[employeeId] || {};
-      const missingDays = weekDayStrings.filter(day => !data.entries[day] && !empAbsences[day]);
-      const hasAlerts = Object.values(data.entries).some(e => e.alerts);
+    // Gerar report SÓ de quem tem dados (entries ou absences)
+    const report = Object.entries(employeeEntries)
+      .map(([employeeId, data]) => {
+        const daysWorked = Object.keys(data.entries).length;
+        const totalMinutes = Object.values(data.entries).reduce((sum, e) => sum + e.totalMinutes, 0);
+        const empAbsences = absenceMap[employeeId] || {};
+        const missingDays = weekDayStrings.filter(day => !data.entries[day] && !empAbsences[day]);
+        const hasAlerts = Object.values(data.entries).some(e => e.alerts);
 
-      return {
-        employeeId,
-        employeeName: data.name,
-        weekRange: `${format(weekStart, 'dd/MM')} - ${format(weekEnd, 'dd/MM')}`,
-        daysWorked,
-        missingDays: missingDays.length,
-        missingDaysList: missingDays.map(d => format(parseISO(d), 'dd/MM')),
-        totalMinutes,
-        totalFormatted: formatMinutesToHours(totalMinutes),
-        hasUnjustifiedAbsence: missingDays.length >= 3,
-        hasAlerts,
-        dailyEntries: data.entries,
-        absences: empAbsences,
-      };
-    });
+        return {
+          employeeId,
+          employeeName: data.name,
+          weekRange: `${format(weekStart, 'dd/MM')} - ${format(weekEnd, 'dd/MM')}`,
+          daysWorked,
+          absenceCount: Object.keys(empAbsences).length,
+          missingDays: missingDays.length,
+          missingDaysList: missingDays.map(d => format(parseISO(d), 'dd/MM')),
+          totalMinutes,
+          totalFormatted: formatMinutesToHours(totalMinutes),
+          hasUnjustifiedAbsence: missingDays.length >= 3,
+          hasAlerts,
+          dailyEntries: data.entries,
+          absences: empAbsences,
+        };
+      })
+      // Filtro final: só mostra quem tem horas OU ausências na semana
+      .filter(r => r.daysWorked > 0 || r.absenceCount > 0);
 
-    // Pre-format day headers for the client (so client doesn't need date-fns)
     const dowLabels = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
     const dayHeaders = weekDays.map(d => ({
       date: format(d, 'yyyy-MM-dd'),
@@ -150,7 +156,6 @@ export async function GET(request: NextRequest) {
       isWeekend: d.getDay() === 0 || d.getDay() === 6,
     }));
 
-    // Previous / next week helper dates
     const prevWeekDate = format(startOfWeek(new Date(weekStart.getTime() - 7 * 86400000), { weekStartsOn: 0 }), 'yyyy-MM-dd');
     const nextWeekDate = format(startOfWeek(new Date(weekStart.getTime() + 7 * 86400000), { weekStartsOn: 0 }), 'yyyy-MM-dd');
 
